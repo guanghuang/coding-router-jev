@@ -42,6 +42,7 @@ export type PiRequest = {
   priorContext?: { userExcerpt?: string; assistantExcerpt?: string };
   contextTokens?: number;
   signal?: AbortSignal;
+  state?: AdapterState;
 };
 
 export type PiModelRegistry = {
@@ -138,6 +139,78 @@ export function estimateContextTokens(request: PiRequest): ContextEvidence {
   return { tokens, source: "estimated", accuracy: "character-based heuristic, not a tokenizer measurement" };
 }
 
+export function validateSavedState(
+  saved: unknown,
+  registry: PiModelRegistry,
+): AdapterState | null {
+  if (!saved || typeof saved !== "object") return null;
+  const s = saved as Record<string, unknown>;
+  if (s.version !== 1) return null;
+  if (typeof s.provider !== "string" || typeof s.modelId !== "string") return null;
+  if (typeof s.tier !== "string" || !TIERS.includes(s.tier as Tier)) return null;
+  if (typeof s.effectiveEffort !== "string" || !PI_THINKING_LEVELS.includes(s.effectiveEffort as PiThinkingLevel)) return null;
+
+  const info = registry.find(s.provider, s.modelId);
+  if (!info) return null;
+  if (info.authenticated === false) return null;
+
+  return {
+    tier: s.tier as Tier,
+    provider: s.provider,
+    modelId: s.modelId,
+    effectiveEffort: s.effectiveEffort as PiThinkingLevel,
+    version: 1,
+  };
+}
+
+export function reconcileState(
+  saved: AdapterState,
+  previous: { provider: string; modelId: string; thinkingLevel?: string } | undefined,
+  config: Config,
+  registry: PiModelRegistry,
+  clamp: PiClamp,
+): AdapterState {
+  if (!previous) return saved;
+
+  if (previous.provider === saved.provider && previous.modelId === saved.modelId) {
+    const level = previous.thinkingLevel as PiThinkingLevel | undefined;
+    const supported = clamp.getSupportedThinkingLevels({ provider: saved.provider, modelId: saved.modelId });
+    const effort = level && supported.includes(level)
+      ? clamp.clampThinkingLevel({ provider: saved.provider, modelId: saved.modelId }, level)
+      : saved.effectiveEffort;
+    return { ...saved, effectiveEffort: effort };
+  }
+
+  const prevInfo = registry.find(previous.provider, previous.modelId);
+  if (!prevInfo || prevInfo.authenticated === false) return saved;
+
+  const { candidates } = piCandidatesFor(config, registry);
+  const qualifiedPrev = `${previous.provider}/${previous.modelId}`;
+  const matchingCandidate = candidates.find(
+    c => c.id === qualifiedPrev && c.tier === saved.tier,
+  ) ?? candidates.find(c => c.id === qualifiedPrev);
+
+  if (!matchingCandidate) return saved;
+
+  const level = previous.thinkingLevel as PiThinkingLevel | undefined;
+  const supported = clamp.getSupportedThinkingLevels({ provider: previous.provider, modelId: previous.modelId });
+  const effort = level && supported.includes(level)
+    ? clamp.clampThinkingLevel({ provider: previous.provider, modelId: previous.modelId }, level)
+    : ((): PiThinkingLevel => {
+        const fallbackCandidate = matchingCandidate;
+        const ref = { provider: previous.provider, modelId: previous.modelId };
+        return resolveEffort(undefined, fallbackCandidate, undefined, clamp, ref);
+      })();
+
+  return {
+    tier: matchingCandidate.tier,
+    provider: previous.provider,
+    modelId: previous.modelId,
+    effectiveEffort: effort,
+    version: 1,
+  };
+}
+
 type CreateAdapterOptions = {
   config?: Config;
   route?: Route;
@@ -166,15 +239,23 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     return { tier: startCandidate.tier, provider, modelId, effectiveEffort: effort, version: 1 };
   }
 
+  function restoreFromRequest(request: PiRequest): void {
+    if (!request.state) return;
+    const validated = validateSavedState(request.state, registry);
+    if (!validated) return;
+    state = reconcileState(validated, request.previous, config, registry, clamp);
+  }
+
   async function resolveModel(request: PiRequest): Promise<AdapterResult> {
+    if (request.reason === "direct") {
+      return handleDirect(request);
+    }
+    restoreFromRequest(request);
     if (request.reason === "continuation") {
       return handleContinuation(request);
     }
     if (request.reason === "retry") {
       return handleRetry(request);
-    }
-    if (request.reason === "direct") {
-      return handleDirect(request);
     }
     const prior = pending ?? Promise.resolve();
     const job = prior.catch(() => {}).then(() => handleUser(request));
