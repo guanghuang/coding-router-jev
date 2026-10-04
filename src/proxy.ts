@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "./config";
-import { conversationKey, hash, newTurn, recentContext } from "./context";
+import { conversationKey, hash, isJevNotice, newTurn, recentContext } from "./context";
 import { applyEffort, type EffortState } from "./effort";
 import { formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
@@ -122,6 +122,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         if (turn) { notice = state.notice; noticeKey = state.noticeKey; }
       }
       body.model = state.model;
+      if (Array.isArray(body.input)) body.input = body.input.filter(item => !isJevNotice(item));
       return { key, state, notice, noticeKey };
     });
     locks.set(key, job);

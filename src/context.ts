@@ -46,6 +46,10 @@ export function recentContext(body: CodexBody): RecentContext | undefined {
   const assistant = messages.slice(previous + 1, current).findLast(item => item.role === "assistant");
   return { previous_user_request: textOf(messages[previous]).slice(0, 1000), ...(assistant ? { previous_assistant_excerpt: textOf(assistant).slice(0, 1000) } : {}) };
 }
+const JEV_ID_RE = /^jev-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const isJevNotice = (item: Item): boolean =>
+  item.role === "assistant" && typeof item.id === "string" && JEV_ID_RE.test(item.id);
+
 export function conversationKey(body: CodexBody, headers: Headers): string {
   let metadata: Record<string, unknown> = {};
   try { metadata = JSON.parse(String(body.client_metadata?.["x-codex-turn-metadata"] ?? "{}")); } catch {}
