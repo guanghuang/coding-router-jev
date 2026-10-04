@@ -216,7 +216,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         const effectiveEffort = resolveClaudeThinking(effortToApply, selectedCaps, body as Record<string, unknown>);
 
         state.model = selected.id;
-        state.tier = decision.tier;
+        state.tier = selected.tier;
         state.lastEffort = effectiveEffort;
         state.lastTurn = turnKey;
 
