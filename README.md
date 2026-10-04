@@ -10,6 +10,71 @@ All installation paths require the Codex CLI (`codex`) installed separately with
 
 Download a prebuilt standalone binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases). No Bun installation required.
 
+### One-command installer
+
+The `install.sh` script detects your OS and architecture, downloads the correct binary, verifies its SHA-256 checksum, and places it in `~/.local/bin`. No sudo required.
+
+**Public repository (once public):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
+```
+
+**Private repository (requires authentication):**
+
+```sh
+# Option 1: Set GH_TOKEN
+GH_TOKEN=ghp_your_token sh install.sh
+
+# Option 2: Download the script first, then run locally
+gh release download --repo guanghuang/coding-router-jev --pattern install.sh
+sh install.sh
+```
+
+**Download and review before executing:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
+less install.sh      # review the script
+sh install.sh        # run after review
+```
+
+#### Installer flags
+
+| Flag | Environment variable | Description |
+|------|---------------------|-------------|
+| `--version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
+| `--dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `~/.local/bin`) |
+| `--help` | — | Show usage |
+| — | `GH_TOKEN` | GitHub token for private repository access |
+
+**Version pinning and rollback:**
+
+```sh
+# Install a specific version
+sh install.sh --version v0.1.0
+
+# Rollback to an older version
+sh install.sh --version v0.0.9
+```
+
+**Custom install directory:**
+
+```sh
+sh install.sh --dir /opt/bin
+```
+
+**Uninstall:**
+
+```sh
+rm ~/.local/bin/codex-jev    # or your custom --dir path
+# ~/.coding-router-jev.env is yours to keep or remove
+```
+
+The installer never modifies `~/.coding-router-jev.env` or shell startup files. When the install directory is not in your `PATH`, the script prints the export command to add. Repeating the install upgrades the binary without accumulating `PATH` entries.
+
+### Manual download
+
 ```sh
 # Download the latest release (requires gh CLI and repository access)
 gh release download --repo guanghuang/coding-router-jev --pattern 'codex-jev-linux-x64'
