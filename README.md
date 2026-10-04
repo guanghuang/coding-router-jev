@@ -349,6 +349,7 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 | `CODING_ROUTER_STRONG_MODEL_CODEX` | `chatgpt-6.1-sol` |
 | `CODING_ROUTER_LONG_MODEL_CODEX` | `chatgpt-6-astra` |
 | `CODING_ROUTER_LONG_MODEL_ENABLE` | `false` |
+| `CODING_ROUTER_START_TIER` | `fast`; initial tier for new conversations and after restart. Allowed: `fast`, `balanced`, `strong`, `long`. Invalid or blank defaults to `fast`. `long` with Long disabled falls back to `fast`. The configured model alias for the chosen tier determines the actual startup model. |
 | `CODING_ROUTER_MIN_CONFIDENCE` | `0.30`; valid range `0`–`1`, invalid values fall back |
 | `CODING_ROUTER_SEND_RECENT_CONTEXT` | `true` |
 | `CODING_ROUTER_FEEDBACK_FORMAT` | See [Feedback format](#feedback-format) below; unset uses the built-in notice |
@@ -403,7 +404,7 @@ flowchart LR
 
 The proxy offers **Coding Router Jev** in the model catalog and selects it by default. Choosing a concrete model with `--model` or the model picker bypasses JEV; choosing the router again resumes automatic routing. Existing provider authorization and account headers are forwarded. Auxiliary title/catch-up prompts and tool continuations do not trigger JEV routing.
 
-The proxy initializes each new in-memory conversation state at the configured **Strong** tier; in-memory routing state resets when the process restarts, so tier observations and cache tracking from the previous session are lost.
+The proxy initializes each new in-memory conversation state at the configured startup tier (default **Fast**; set `CODING_ROUTER_START_TIER` to change). The startup tier is a baseline: JEV still routes the first actual user message normally and may select a different tier. In-memory routing state resets when the process restarts to the configured startup tier, so tier observations and cache tracking from the previous session are lost. Restart does not recover the previous router model, effort-update history, or cache observations; prior user/assistant excerpts can still be sent when present in Codex's incoming history and recent-context is enabled.
 
 The JEV request includes:
 
@@ -495,7 +496,7 @@ bun run build   # produces dist/codex-jev and dist/jev-logs
 
 ## Resume
 
-The `resume` subcommand and its flags (e.g. `--last`, `--all`) are forwarded directly to Codex. The router does not manage sessions; session storage, filtering, and visibility are controlled by Codex. Adding `--all` removes the working-directory filter in Codex, but another provider configuration can still affect which sessions are visible. The router's in-memory routing state (tier, observations, cache tracking) is not persisted across restarts.
+The `resume` subcommand and its flags (e.g. `--last`, `--all`) are forwarded directly to Codex. The router does not manage sessions; session storage, filtering, and visibility are controlled by Codex. Adding `--all` removes the working-directory filter in Codex, but another provider configuration can still affect which sessions are visible. The router's in-memory routing state (tier, observations, cache tracking) is not persisted across restarts; a resumed session starts at the configured startup tier (default Fast) rather than the previous session's final tier.
 
 ## Verification
 

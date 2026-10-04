@@ -76,7 +76,8 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
       const candidates = candidatesFor(config, catalog);
       let state = states.get(key);
       if (!state) {
-        state = { tier: "strong", model: candidates.find(candidate => candidate.tier === "strong")!.id, effort: { updates: [] }, observations: [] };
+        const startCandidate = candidates.find(candidate => candidate.tier === config.startTier) ?? candidates.find(candidate => candidate.tier === "fast")!;
+        state = { tier: startCandidate.tier, model: startCandidate.id, effort: { updates: [] }, observations: [] };
         states.set(key, state);
         // One wrapper normally has one main conversation; bound auxiliary-session storage.
         if (states.size > 100) states.delete(states.keys().next().value!);

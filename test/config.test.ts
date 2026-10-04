@@ -13,6 +13,7 @@ describe("configuration", () => {
         strong: "chatgpt-6.1-sol",
         long: "chatgpt-6-astra",
       },
+      startTier: "fast",
       longModelEnabled: false,
       minConfidence: 0.3,
       sendRecentContext: true,
@@ -70,5 +71,40 @@ describe("configuration", () => {
     expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "-5" }).logRetentionDays).toBeUndefined();
     expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "abc" }).logRetentionDays).toBeUndefined();
     expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "Infinity" }).logRetentionDays).toBeUndefined();
+  });
+
+  test("startTier defaults to fast when unset or blank", () => {
+    expect(configFromEnv({}).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "  " }).startTier).toBe("fast");
+  });
+
+  test("startTier falls back to fast for invalid values", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "turbo" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "medium" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "123" }).startTier).toBe("fast");
+  });
+
+  test("startTier trims whitespace and normalizes case", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "  FAST  " }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "Strong" }).startTier).toBe("strong");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "BALANCED" }).startTier).toBe("balanced");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: " Long " }).startTier).toBe("fast");
+  });
+
+  test("startTier accepts each supported tier", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "fast" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "balanced" }).startTier).toBe("balanced");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "strong" }).startTier).toBe("strong");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long", CODING_ROUTER_LONG_MODEL_ENABLE: "true" }).startTier).toBe("long");
+  });
+
+  test("startTier long falls back to fast when Long is disabled", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long", CODING_ROUTER_LONG_MODEL_ENABLE: "false" }).startTier).toBe("fast");
+  });
+
+  test("startTier long is accepted when Long is enabled", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long", CODING_ROUTER_LONG_MODEL_ENABLE: "true" }).startTier).toBe("long");
   });
 });
