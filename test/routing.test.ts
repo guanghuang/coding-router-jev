@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { configFromEnv } from "../src/config";
-import { newTurn, recentContext, userAnchors } from "../src/context";
+import { isJevNotice, newTurn, recentContext, userAnchors } from "../src/context";
 import { applyEffort, type EffortState } from "../src/effort";
 import { decide, decisionLabel } from "../src/policy";
 import { buildRequest } from "../src/router";
@@ -112,4 +112,15 @@ test("Codex startup instructions are excluded from routing and recent context", 
   expect(newTurn({ model: AUTO_MODEL, input: [startup, first] })?.prompt).toBe("fix the bug");
   expect(recentContext({ model: AUTO_MODEL, input: [startup, first] })).toBeUndefined();
   expect(newTurn({ model: AUTO_MODEL, input: [startup, first] })?.anchor).toBe(newTurn({ model: AUTO_MODEL, input: [first] })?.anchor);
+});
+
+test("isJevNotice identifies proxy-injected notices by provenance and rejects everything else", () => {
+  expect(isJevNotice({ role: "assistant", id: "jev-39f3a1a0-0045-495e-a502-8afd3b9544f9" })).toBe(true);
+  expect(isJevNotice({ role: "assistant", id: "jev-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" })).toBe(true);
+  expect(isJevNotice({ role: "assistant", id: "msg_09a50707f436a8b9016ac1e9a9833487" })).toBe(false);
+  expect(isJevNotice({ role: "user", id: "jev-39f3a1a0-0045-495e-a502-8afd3b9544f9" })).toBe(false);
+  expect(isJevNotice({ role: "assistant", content: "[Jev] tier: fast" })).toBe(false);
+  expect(isJevNotice({ role: "assistant" })).toBe(false);
+  expect(isJevNotice({ role: "assistant", id: "jev-short" })).toBe(false);
+  expect(isJevNotice({ role: "assistant", id: "jev-XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" })).toBe(false);
 });
