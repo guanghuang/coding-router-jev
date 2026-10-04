@@ -85,6 +85,66 @@ test("disabled recent context is omitted and a failed JEV call keeps the current
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("custom feedback format with all placeholders verified through proxy", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-feedback-"));
+  const notices: string[] = [];
+  let turnCount = 0;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    return new Response(`event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { model: body.model, usage: { input_tokens_details: { cached_tokens: 42, cache_write_tokens: 7 } } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const format = "[Jev] {tier} · {model} · {effort} · {decision} · {confidence} · prev:{previous_model} · cr:{cache_read} · cw:{cache_write} · jin:{jev_tokens_input} · jout:{jev_tokens_output} · jtotal:{jev_tokens}";
+  const config = configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: format });
+  const route: Route = async input => { turnCount++; return turnCount === 1 ? result(input, "strong", "high") : result(input, "balanced", "low"); };
+  const proxy = startProxy(config, { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory, onNotice: notice => notices.push(notice) });
+  const send = (input: Item[]) => fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input }) }).then(r => r.text());
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    const first: Item = { role: "user", content: "hello" };
+    await send([first]);
+    expect(notices).toHaveLength(1);
+    // Turn 1: verify ALL placeholders including jev_tokens_input/output (M1+M3)
+    expect(notices[0]).toBe("[Jev] strong · gpt-6.1-sol · high · JEV/no-change · 0.90 · prev:gpt-6.1-sol · cr:unavailable · cw:unavailable · jin:1 · jout:1 · jtotal:2");
+    // Turn 2: routes to balanced; previous_model should reflect model from turn 1 (M2)
+    const second: Item = { role: "user", content: "follow up" };
+    await send([first, { role: "assistant", content: "answer" }, second]);
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toBe("[Jev] balanced · gpt-6.1-sol · low · JEV · 0.90 · prev:gpt-6.1-sol · cr:42 · cw:7 · jin:1 · jout:1 · jtotal:2");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("malformed JEV usage fields render as unavailable in feedback", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-malformed-"));
+  const notices: string[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    return new Response(`event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { model: body.model, usage: { input_tokens_details: { cached_tokens: 10 } } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const config = configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "jin:{jev_tokens_input} jout:{jev_tokens_output} jtotal:{jev_tokens}" });
+  // Route returns malformed usage: NaN and Infinity should be rejected by isFinite checks (M4)
+  const route: Route = async input => ({
+    request: buildRequest(input), ms: 1, response: {
+      model: "fake-jev", usage: { input_tokens: NaN, output_tokens: Infinity },
+      answers: { model: { type: "choice" as const, choice: "strong", confidence: 0.9, probabilities: {} }, reasoning_effort: { type: "choice" as const, choice: "high", confidence: 0.9, probabilities: {} } },
+    },
+  });
+  const proxy = startProxy(config, { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory, onNotice: notice => notices.push(notice) });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "test" }] }) }).then(r => r.text());
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toBe("jin:unavailable jout:unavailable jtotal:unavailable");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
 test.each([true, false])("a provider retry reuses the JEV decision and displays one notice (SSE header: %s)", async (hasSSEHeader) => {
   const directory = await mkdtemp(join(tmpdir(), "codex-jev-retry-"));
   let upstreamCalls = 0;

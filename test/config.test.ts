@@ -16,6 +16,7 @@ describe("configuration", () => {
       longModelEnabled: false,
       minConfidence: 0.3,
       sendRecentContext: true,
+      feedbackFormat: undefined,
     });
   });
 
@@ -41,6 +42,13 @@ describe("configuration", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("parses feedback format and normalizes empty/whitespace to undefined", () => {
+    expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "[Jev] {tier}" }).feedbackFormat).toBe("[Jev] {tier}");
+    expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "  " }).feedbackFormat).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "" }).feedbackFormat).toBeUndefined();
+    expect(configFromEnv({}).feedbackFormat).toBeUndefined();
   });
 
   test("uses valid confidence override and falls back for invalid values", () => {
