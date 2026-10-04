@@ -2,33 +2,75 @@
 
 A TypeScript/Bun wrapper that routes Codex user turns through JEV. The command is `codex-jev`, separate from the original project's `jev-codex`.
 
-## Run
+## Prerequisites
 
-Requires Bun and the installed Codex CLI (`codex`) with its usual authentication.
+Both installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
+
+## Install from source (Bun required)
+
+Running from source requires [Bun](https://bun.sh/).
 
 ```sh
+git clone https://github.com/guanghuang/coding-router-jev.git
+cd coding-router-jev
 bun install
-cp .env.example ~/.coding-router-jev.env
-# Edit the file and set TYPESAFE_API_KEY, or export it in your shell.
+```
+
+Create the environment file without overwriting an existing one:
+
+```sh
+cp -n .env.example ~/.coding-router-jev.env   # GNU/Linux; on systems without cp -n, copy only if the file does not exist
+chmod 600 ~/.coding-router-jev.env
+# Edit ~/.coding-router-jev.env and set TYPESAFE_API_KEY, or export it in your shell.
+```
+
+Register the `codex-jev` command globally via `bun link`:
+
+```sh
+bun link
+```
+
+Verify the command is available on your PATH:
+
+```sh
+which codex-jev        # should print the bun-linked path
+codex-jev --help       # forwards to codex --help
+```
+
+If `which codex-jev` prints nothing, add the Bun global bin directory to your PATH:
+
+```sh
+export PATH="$HOME/.bun/bin:$PATH"
+```
+
+Run directly from the repository without linking:
+
+```sh
 bun run src/cli.ts
 bun run src/cli.ts resume --last
 bun run src/cli.ts exec "explain this repository"
 ```
 
-Build a standalone local launcher:
+## Compiled launcher (Bun not required at runtime)
+
+Build a standalone local launcher that does not require Bun at runtime:
 
 ```sh
 bun run build
 ./dist/codex-jev
 ```
 
-Or use `bun link` to install the source command locally. The source command requires Bun; the compiled launcher does not. Both still launch the separately installed Codex CLI.
+The compiled launcher still requires the separately installed and authenticated Codex CLI.
+
+> **Note:** `codex-jev` forwards all arguments to Codex, so `--version` and `--help` identify the Codex CLI, not a dedicated router version.
+
+## How it works
 
 Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and starts ordinary Codex. With the key, it starts a proxy on `127.0.0.1` at an OS-assigned port, launches Codex with temporary provider settings, and stops the proxy when Codex exits. It passes `--no-daemon` to prevent another Codex session's shared daemon from reusing the wrong provider configuration. No permanent Codex configuration is edited. TypeSafe credentials are not passed to the Codex child process.
 
 ## Configuration
 
-Precedence is process environment, then `~/.coding-router-jev.env`, then built-in defaults. Bun may also load a working-directory `.env` into the process environment. All example values are commented out, so copying the example does not override defaults.
+Precedence is process environment, then `~/.coding-router-jev.env`, then built-in defaults. Bun may also load a working-directory `.env` into the process environment. All example values in `.env.example` are commented out, so copying the example does not override defaults.
 
 | Variable | Default / purpose |
 | --- | --- |
@@ -48,7 +90,7 @@ Configured model choices take priority over catalog detection. The catalog enric
 
 ## Feedback format
 
-The proxy inserts a `[Jev]` routing notice into each response stream. Set `CODING_ROUTER_FEEDBACK_FORMAT` to customize it. When the variable is unset, the default format is:
+The proxy inserts a `[Jev]` routing notice into eligible response streams (see [Routing notices](#routing-notices)). Set `CODING_ROUTER_FEEDBACK_FORMAT` to customize it. When the variable is unset, the default format is:
 
 ```
 [Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.
@@ -92,6 +134,8 @@ flowchart LR
 
 The proxy offers **Coding Router Jev** in the model catalog and selects it by default. Choosing a concrete model with `--model` or the model picker bypasses JEV; choosing the router again resumes automatic routing. Existing provider authorization and account headers are forwarded. Auxiliary title/catch-up prompts and tool continuations do not trigger JEV routing.
 
+The proxy initializes each new in-memory conversation state at the configured **Strong** tier; in-memory routing state resets when the process restarts, so tier observations and cache tracking from the previous session are lost.
+
 The JEV request includes:
 
 - The latest user message and a short routing-purpose instruction.
@@ -104,12 +148,16 @@ The three score questions (`task_complexity`, `reasoning_required`, `tool_comple
 
 ### Local policy
 
-- Explicit leading requests such as “use Fast” or “switch to Strong” override the JEV tier choice.
+- Explicit leading requests such as "use Fast" or "switch to Strong" override the JEV tier choice.
 - Invalid choices, failed JEV requests, and malformed confidence retain the current tier. JEV has a three-second deadline.
-- Below the configured confidence threshold, downgrades are refused and upgrades above Balanced are capped at Balanced (or retained if unavailable).
+- Below the configured confidence threshold, downgrades are refused and upgrades are capped at the higher of the current tier and Balanced (or retained if that tier is unavailable). For example, from Fast the ceiling is Balanced; from Strong the ceiling stays Strong.
 - There is **no local cache downgrade guard**. JEV receives the observations to weigh cache reuse.
 - Unsupported or low-confidence effort choices keep a compatible current effort or use the model's default.
-- Tool continuations and duplicate requests reuse the selected tier and effort. The proxy adds a configurable routing notice (see [Feedback format](#feedback-format)) to the response stream as assistant commentary; concurrent requests for a turn produce one decision and one notice.
+- Tool continuations and duplicate requests reuse the selected tier and effort.
+
+### Routing notices
+
+The proxy adds a configurable routing notice (see [Feedback format](#feedback-format)) as assistant commentary in eligible response streams. Eligible streams are those with `Content-Type` of `text/event-stream` or `application/octet-stream`, as well as responses where the upstream `Content-Type` header is absent; in the latter case, a notice is added only when the response body contains SSE-shaped frames. Non-streaming JSON responses do not receive a notice. Concurrent requests for a turn produce one decision and one notice.
 
 ### Reasoning effort and cache reuse
 
@@ -119,13 +167,17 @@ Configuration updates cannot be combined with automatic compaction or automatic 
 
 ## Routing history
 
-Each JEV exchange appends one JSON line to a session-specific file under `${TMPDIR:-/tmp}/coding-router-jev/codex-<process-id>-<uuid>.jsonl`. The directory has mode `700`; files have mode `600`. Each record includes the routing ID, time, conversation/turn IDs, prompt, JEV request/response or error, previous selection, final decision, and cache observations. Credentials and HTTP authorization headers are not logged. Provider retries reuse the decision rather than appending another JEV exchange.
+Each JEV exchange appends one JSON line to a session-specific file under `${TMPDIR:-/tmp}/coding-router-jev/codex-<process-id>-<uuid>.jsonl`. The directory is created with POSIX mode `700` and files with mode `600`; these permissions are not equivalent to Windows ACLs and do not provide the same guarantees on non-POSIX platforms. Each record includes the routing ID, time, conversation/turn IDs, prompt, JEV request/response or error, previous selection, final decision, and cache observations. Credentials and HTTP authorization headers are not logged. Provider retries reuse the decision rather than appending another JEV exchange.
 
 ```sh
-tail -f /tmp/coding-router-jev/codex-<session>.jsonl
+tail -f "${TMPDIR:-/tmp}/coding-router-jev/codex-<process-id>-<uuid>.jsonl"
 ```
 
-Logs contain prompt text. They grow by appending, and normal OS temporary-file cleanup may remove them. Automatic log rotation is not implemented.
+Logs contain user prompts and routing payloads (including optional recent context excerpts). Treat JSONL files as confidential; do not paste them into public issues without redaction. They grow by appending, and normal OS temporary-file cleanup may remove them. If writing a log entry fails, the router prints `[Jev] could not write routing history` to stderr and continues. Automatic log rotation is not implemented.
+
+## Resume
+
+The `resume` subcommand and its flags (e.g. `--last`, `--all`) are forwarded directly to Codex. The router does not manage sessions; session storage, filtering, and visibility are controlled by Codex. Adding `--all` removes the working-directory filter in Codex, but another provider configuration can still affect which sessions are visible. The router's in-memory routing state (tier, observations, cache tracking) is not persisted across restarts.
 
 ## Verification
 
@@ -135,8 +187,8 @@ bun test
 bun run build
 ```
 
-Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally, but not yet in a live interactive session.
+Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
 
 ## Attribution
 
-JEV question instructions and tier guidance are adapted from [jev-router](https://github.com/gargpratyush/jev-router), copyright 2026 Jev Router contributors, under the included MIT license.
+JEV question instructions and tier guidance are adapted from [jev-router](https://github.com/gargpratyush/jev-router), copyright 2026 Jev Router contributors, under the included [MIT license](./LICENSE).
