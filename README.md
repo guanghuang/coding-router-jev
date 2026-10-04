@@ -19,7 +19,8 @@ bun install
 Create the environment file without overwriting an existing one:
 
 ```sh
-cp -n .env.example ~/.coding-router-jev.env
+cp -n .env.example ~/.coding-router-jev.env   # GNU/Linux; on systems without cp -n, copy only if the file does not exist
+chmod 600 ~/.coding-router-jev.env
 # Edit ~/.coding-router-jev.env and set TYPESAFE_API_KEY, or export it in your shell.
 ```
 
@@ -33,7 +34,7 @@ Verify the command is available on your PATH:
 
 ```sh
 which codex-jev        # should print the bun-linked path
-codex-jev --help       # forwards to codex --help (see note below)
+codex-jev --help       # forwards to codex --help
 ```
 
 If `which codex-jev` prints nothing, add the Bun global bin directory to your PATH:
@@ -61,7 +62,7 @@ bun run build
 
 The compiled launcher still requires the separately installed and authenticated Codex CLI.
 
-> **Note:** `codex-jev --version` forwards the flag to Codex, so it identifies the Codex CLI version, not a dedicated router version.
+> **Note:** `codex-jev` forwards all arguments to Codex, so `--version` and `--help` identify the Codex CLI, not a dedicated router version.
 
 ## How it works
 
@@ -133,7 +134,7 @@ flowchart LR
 
 The proxy offers **Coding Router Jev** in the model catalog and selects it by default. Choosing a concrete model with `--model` or the model picker bypasses JEV; choosing the router again resumes automatic routing. Existing provider authorization and account headers are forwarded. Auxiliary title/catch-up prompts and tool continuations do not trigger JEV routing.
 
-A new conversation starts at the configured **Strong** tier; in-memory routing state resets when the process restarts, so tier observations and cache tracking from the previous session are lost.
+The proxy initializes each new in-memory conversation state at the configured **Strong** tier; in-memory routing state resets when the process restarts, so tier observations and cache tracking from the previous session are lost.
 
 The JEV request includes:
 
@@ -156,7 +157,7 @@ The three score questions (`task_complexity`, `reasoning_required`, `tool_comple
 
 ### Routing notices
 
-The proxy adds a configurable routing notice (see [Feedback format](#feedback-format)) as assistant commentary in eligible response streams. Eligible streams are server-sent event streams, including responses where the upstream `Content-Type` header is absent. Non-streaming JSON responses do not receive a notice. Concurrent requests for a turn produce one decision and one notice.
+The proxy adds a configurable routing notice (see [Feedback format](#feedback-format)) as assistant commentary in eligible response streams. Eligible streams are those with `Content-Type` of `text/event-stream` or `application/octet-stream`, as well as responses where the upstream `Content-Type` header is absent; in the latter case, a notice is added only when the response body contains SSE-shaped frames. Non-streaming JSON responses do not receive a notice. Concurrent requests for a turn produce one decision and one notice.
 
 ### Reasoning effort and cache reuse
 
@@ -169,10 +170,10 @@ Configuration updates cannot be combined with automatic compaction or automatic 
 Each JEV exchange appends one JSON line to a session-specific file under `${TMPDIR:-/tmp}/coding-router-jev/codex-<process-id>-<uuid>.jsonl`. The directory is created with POSIX mode `700` and files with mode `600`; these permissions are not equivalent to Windows ACLs and do not provide the same guarantees on non-POSIX platforms. Each record includes the routing ID, time, conversation/turn IDs, prompt, JEV request/response or error, previous selection, final decision, and cache observations. Credentials and HTTP authorization headers are not logged. Provider retries reuse the decision rather than appending another JEV exchange.
 
 ```sh
-tail -f /tmp/coding-router-jev/codex-<session>.jsonl
+tail -f "${TMPDIR:-/tmp}/coding-router-jev/codex-<process-id>-<uuid>.jsonl"
 ```
 
-Logs contain prompt text. They grow by appending, and normal OS temporary-file cleanup may remove them. Automatic log rotation is not implemented.
+Logs contain user prompts and routing payloads (including optional recent context excerpts). Treat JSONL files as confidential; do not paste them into public issues without redaction. They grow by appending, and normal OS temporary-file cleanup may remove them. If writing a log entry fails, the router prints `[Jev] could not write routing history` to stderr and continues. Automatic log rotation is not implemented.
 
 ## Resume
 
@@ -190,4 +191,4 @@ Tests use local fake JEV/provider endpoints to cover routing, SDK configuration,
 
 ## Attribution
 
-JEV question instructions and tier guidance are adapted from [jev-router](https://github.com/gargpratyush/jev-router), copyright 2026 Jev Router contributors, under the included MIT license.
+JEV question instructions and tier guidance are adapted from [jev-router](https://github.com/gargpratyush/jev-router), copyright 2026 Jev Router contributors, under the included [MIT license](./LICENSE).
