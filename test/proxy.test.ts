@@ -96,17 +96,26 @@ test("custom feedback format with usage placeholders flows through proxy", async
     return new Response(`event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { model: body.model, usage: { input_tokens_details: { cached_tokens: 42, cache_write_tokens: 7 } } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
   const base = `http://127.0.0.1:${upstream.port}`;
-  const config = configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "[Jev] {tier} · {model} · {effort} · {decision} · {confidence} · prev:{previous_model} · jev:{jev_tokens}" });
+  const config = configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "[Jev] {tier} · {model} · {effort} · {decision} · {confidence} · prev:{previous_model} · cr:{cache_read} · cw:{cache_write} · jev:{jev_tokens}" });
   const route: Route = async input => result(input, "strong", "high");
   const proxy = startProxy(config, { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory, onNotice: notice => notices.push(notice) });
+  const send = (input: Item[]) => fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input }) }).then(r => r.text());
   try {
     await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
-    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "hello" }] }) }).then(r => r.text());
+    const first: Item = { role: "user", content: "hello" };
+    await send([first]);
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("[Jev] strong ·");
     expect(notices[0]).toContain("· prev:gpt-6.1-sol");
+    expect(notices[0]).toContain("· cr:unavailable");
+    expect(notices[0]).toContain("· cw:unavailable");
     expect(notices[0]).toContain("· jev:2");
     expect(notices[0]).not.toContain("{tier}");
+    const second: Item = { role: "user", content: "follow up" };
+    await send([first, { role: "assistant", content: "answer" }, second]);
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toContain("· cr:42");
+    expect(notices[1]).toContain("· cw:7");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
