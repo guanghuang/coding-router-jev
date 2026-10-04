@@ -23,12 +23,13 @@ curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/i
 **Private repository (requires authentication):**
 
 ```sh
-# Option 1: Set GH_TOKEN
+# Option 1: Set GH_TOKEN and run locally
+curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
 GH_TOKEN=ghp_your_token sh install.sh
 
-# Option 2: Download the script first, then run locally
-gh release download --repo guanghuang/coding-router-jev --pattern install.sh
-sh install.sh
+# Option 2: Clone and run from source checkout
+git clone https://github.com/guanghuang/coding-router-jev.git
+GH_TOKEN=ghp_your_token sh coding-router-jev/install.sh
 ```
 
 **Download and review before executing:**
@@ -44,7 +45,7 @@ sh install.sh        # run after review
 | Flag | Environment variable | Description |
 |------|---------------------|-------------|
 | `--version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
-| `--dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `~/.local/bin`) |
+| `--dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `~/.local/bin`). Use an absolute path; `~` is not expanded. |
 | `--help` | — | Show usage |
 | — | `GH_TOKEN` | GitHub token for private repository access |
 

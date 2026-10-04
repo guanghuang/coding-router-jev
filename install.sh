@@ -20,6 +20,13 @@ set -eu
 
 REPO="guanghuang/coding-router-jev"
 BINARY_NAME="codex-jev"
+
+# Guard against unset HOME early with a clear message.
+if [ -z "${HOME:-}" ]; then
+  printf 'error: HOME is not set. The installer requires HOME to determine the default install directory.\n' >&2
+  exit 1
+fi
+
 DEFAULT_INSTALL_DIR="$HOME/.local/bin"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -41,12 +48,16 @@ parse_args() {
         [ $# -ge 2 ] || die "--version requires a value"
         CODEX_JEV_VERSION="$2"; shift 2 ;;
       --version=*)
-        CODEX_JEV_VERSION="${1#--version=}"; shift ;;
+        CODEX_JEV_VERSION="${1#--version=}"
+        [ -n "$CODEX_JEV_VERSION" ] || die "--version requires a non-empty value"
+        shift ;;
       --dir)
         [ $# -ge 2 ] || die "--dir requires a value"
         INSTALL_DIR="$2"; shift 2 ;;
       --dir=*)
-        INSTALL_DIR="${1#--dir=}"; shift ;;
+        INSTALL_DIR="${1#--dir=}"
+        [ -n "$INSTALL_DIR" ] || die "--dir requires a non-empty value"
+        shift ;;
       --help|-h)
         show_help; exit 0 ;;
       *)
@@ -65,6 +76,7 @@ Usage:
 Options:
   --version VERSION   Install a specific release (e.g. v0.1.0)
   --dir DIRECTORY     Install directory (default: ~/.local/bin)
+                      Use an absolute path or $HOME; ~ is not expanded.
   --help, -h          Show this help
 
 Environment:
@@ -119,13 +131,21 @@ check_musl() {
   if [ -f /etc/alpine-release ]; then
     die "Alpine Linux (musl) is not supported. glibc Linux is required."
   fi
-  # shellcheck disable=SC2044
-  for f in /lib/ld-musl-*; do
-    if [ -e "$f" ]; then
-      die "musl libc detected ($f). glibc Linux is required."
-    fi
-    break
+  # Check common musl loader paths
+  for _musl_dir in /lib /usr/lib /lib64; do
+    for _musl_loader in "$_musl_dir"/ld-musl-*; do
+      if [ -e "$_musl_loader" ]; then
+        die "musl libc detected ($_musl_loader). glibc Linux is required."
+      fi
+      break
+    done
   done
+  # Check ldd output as a fallback
+  if command -v ldd >/dev/null 2>&1; then
+    if ldd --version 2>&1 | grep -qi musl; then
+      die "musl libc detected (via ldd). glibc Linux is required."
+    fi
+  fi
 }
 
 # ── Version resolution ───────────────────────────────────────────────────────
@@ -139,23 +159,30 @@ resolve_version() {
 
   log "Resolving latest release..."
 
+  _api_url="https://api.github.com/repos/${REPO}/releases/latest"
+  _curl_out="${TMPDIR_INSTALL}/api_response"
+  _curl_err="${TMPDIR_INSTALL}/curl_err"
+
   if [ -n "${GH_TOKEN:-}" ]; then
-    TAG=$(curl -fsSL \
+    if ! curl -fsSL \
       -H "Authorization: token ${GH_TOKEN}" \
       -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/repos/${REPO}/releases/latest" 2>&1) || {
-      handle_api_error "$TAG" "resolve latest version"
-    }
+      "$_api_url" \
+      -o "$_curl_out" 2>"$_curl_err"; then
+      _err=$(cat "$_curl_err" 2>/dev/null || true)
+      handle_api_error "$_err" "resolve latest version"
+    fi
   else
-    TAG=$(curl -fsSL \
+    if ! curl -fsSL \
       -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/repos/${REPO}/releases/latest" 2>&1) || {
-      handle_api_error "$TAG" "resolve latest version"
-    }
+      "$_api_url" \
+      -o "$_curl_out" 2>"$_curl_err"; then
+      _err=$(cat "$_curl_err" 2>/dev/null || true)
+      handle_api_error "$_err" "resolve latest version"
+    fi
   fi
 
-  # Extract tag_name from JSON without jq dependency
-  TAG=$(printf '%s' "$TAG" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  TAG=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_curl_out" | head -1)
   [ -n "$TAG" ] || die "could not determine latest release. Is the repository accessible? Try setting GH_TOKEN."
 
   log "Latest release: $TAG"
@@ -170,7 +197,7 @@ handle_api_error() {
     *"404"*|*"Not Found"*)
       die "release not found while trying to ${_action}. Verify the version exists at https://github.com/${REPO}/releases" ;;
     *)
-      die "failed to ${_action}: ${_body}" ;;
+      die "failed to ${_action}. Check your network connection and GH_TOKEN." ;;
   esac
 }
 
@@ -180,20 +207,21 @@ download_asset() {
   _asset="$1"
   _dest="$2"
 
-  _url="https://github.com/${REPO}/releases/download/${TAG}/${_asset}"
   log "Downloading ${_asset}..."
 
-  _curl_args="-fSL"
   if [ -n "${GH_TOKEN:-}" ]; then
-    _curl_args="$_curl_args -H 'Authorization: token ${GH_TOKEN}'"
-    _curl_args="$_curl_args -H 'Accept: application/octet-stream'"
-
-    if ! eval curl "$_curl_args" -o "'$_dest'" "'https://api.github.com/repos/${REPO}/releases/download/${TAG}/${_asset}'" 2>"${TMPDIR_INSTALL}/curl_err"; then
+    _dl_url="https://api.github.com/repos/${REPO}/releases/download/${TAG}/${_asset}"
+    if ! curl -fSL \
+      -H "Authorization: token ${GH_TOKEN}" \
+      -H "Accept: application/octet-stream" \
+      -o "$_dest" \
+      "$_dl_url" 2>"${TMPDIR_INSTALL}/curl_err"; then
       _err=$(cat "${TMPDIR_INSTALL}/curl_err" 2>/dev/null || true)
       handle_api_error "$_err" "download ${_asset}"
     fi
   else
-    if ! curl -fSL -o "$_dest" "$_url" 2>"${TMPDIR_INSTALL}/curl_err"; then
+    _dl_url="https://github.com/${REPO}/releases/download/${TAG}/${_asset}"
+    if ! curl -fSL -o "$_dest" "$_dl_url" 2>"${TMPDIR_INSTALL}/curl_err"; then
       _err=$(cat "${TMPDIR_INSTALL}/curl_err" 2>/dev/null || true)
       handle_api_error "$_err" "download ${_asset}"
     fi
@@ -207,7 +235,7 @@ verify_checksum() {
   _sums_file="$2"
 
   _basename=$(basename "$_file")
-  _expected=$(grep "  ${_basename}\$" "$_sums_file" | cut -d' ' -f1)
+  _expected=$(grep -F "  ${_basename}" "$_sums_file" | cut -d' ' -f1)
   [ -n "$_expected" ] || die "no checksum found for ${_basename} in SHA256SUMS"
 
   if command -v sha256sum >/dev/null 2>&1; then
@@ -242,7 +270,7 @@ install_binary() {
     log "Replacing existing installation at ${_dest}"
   fi
 
-  chmod +x "$_src"
+  chmod +x "$_src" || die "cannot set executable permission on downloaded binary"
   mv "$_src" "$_dest" || die "failed to install binary to ${_dest}"
 
   log "Installed ${BINARY_NAME} to ${_dest}"
@@ -266,7 +294,6 @@ print_path_help() {
   log "To make it permanent, add that line to your shell startup file"
   log "(e.g. ~/.bashrc, ~/.zshrc, or ~/.profile)."
 
-  # Check if a source-installed codex-jev shadows the new binary
   _existing=$(command -v "$BINARY_NAME" 2>/dev/null || true)
   if [ -n "$_existing" ] && [ "$_existing" != "${_dir}/${BINARY_NAME}" ]; then
     log ""
@@ -295,12 +322,12 @@ main() {
   INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
   CODEX_JEV_VERSION="${CODEX_JEV_VERSION:-}"
 
-  detect_platform
-  resolve_version
-
-  # Create temporary directory for downloads
+  # Create temporary directory early so version resolution can use it
   TMPDIR_INSTALL=$(mktemp -d "${TMPDIR:-/tmp}/codex-jev-install.XXXXXX") || die "cannot create temporary directory"
   trap cleanup EXIT
+
+  detect_platform
+  resolve_version
 
   download_asset "$ASSET_NAME" "${TMPDIR_INSTALL}/${ASSET_NAME}"
   download_asset "SHA256SUMS" "${TMPDIR_INSTALL}/SHA256SUMS"
