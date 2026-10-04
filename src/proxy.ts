@@ -11,7 +11,31 @@ import { TIERS, type Candidate, type CodexBody, type Tier } from "./types";
 
 export const AUTO_MODEL = "coding-router-jev";
 type CatalogModel = { slug: string; display_name?: string; description?: string; context_window?: number; default_reasoning_level?: string; supported_reasoning_levels?: { effort: string }[]; [key: string]: unknown };
-type State = { tier: Tier; model: string; effort: EffortState; lastTurn?: string; notice?: string; noticeKey?: string; usage: (Usage & { at: number; turn?: string })[]; last?: Usage & { at: number } };
+type ResponseObservation = { model: string; read: number | null; created: number | null; at: number };
+type CacheRunSummary = { window: string; observed_responses: number; newest_seconds_ago?: number; oldest_seconds_ago?: number; cache_read_tokens_avg: number | null; cache_created_tokens_avg: number | null };
+export function summarizeCacheRun(observations: ResponseObservation[], currentModel: string, now: number): CacheRunSummary {
+  const matched: ResponseObservation[] = [];
+  const sorted = [...observations].sort((a, b) => b.at - a.at);
+  for (const obs of sorted) {
+    if (obs.model !== currentModel) break;
+    if (now - obs.at > 3_600_000) break;
+    matched.push(obs);
+  }
+  const readValues = matched.map(o => o.read).filter((v): v is number => v !== null);
+  const createdValues = matched.map(o => o.created).filter((v): v is number => v !== null);
+  const result: CacheRunSummary = {
+    window: "up to 1 hour, stopping at the most recent model switch",
+    observed_responses: matched.length,
+    cache_read_tokens_avg: readValues.length ? readValues.reduce((s, v) => s + v, 0) / readValues.length : null,
+    cache_created_tokens_avg: createdValues.length ? createdValues.reduce((s, v) => s + v, 0) / createdValues.length : null,
+  };
+  if (matched.length > 0) {
+    result.newest_seconds_ago = Math.round((now - matched[0].at) / 1000);
+    result.oldest_seconds_ago = Math.round((now - matched[matched.length - 1].at) / 1000);
+  }
+  return result;
+}
+type State = { tier: Tier; model: string; effort: EffortState; lastTurn?: string; notice?: string; noticeKey?: string; observations: ResponseObservation[]; last?: Usage & { at: number } };
 export function candidatesFor(config: Config, catalog: Map<string, CatalogModel>): Candidate[] {
   return TIERS.filter(tier => tier !== "long" || config.longModelEnabled).map(tier => {
     const configured = config.codexModels[tier];
@@ -52,7 +76,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
       const candidates = candidatesFor(config, catalog);
       let state = states.get(key);
       if (!state) {
-        state = { tier: "strong", model: candidates.find(candidate => candidate.tier === "strong")!.id, effort: { updates: [] }, usage: [] };
+        state = { tier: "strong", model: candidates.find(candidate => candidate.tier === "strong")!.id, effort: { updates: [] }, observations: [] };
         states.set(key, state);
         // One wrapper normally has one main conversation; bound auxiliary-session storage.
         if (states.size > 100) states.delete(states.keys().next().value!);
@@ -73,20 +97,8 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         const started = Date.now();
         const currentModel = state.model;
         const currentTier = state.tier;
-        const sameSamples = state.usage.filter(sample => sample.model === currentModel && started - sample.at < 120000).slice(-20);
-        const average = (field: "read" | "created") => {
-          const values = sameSamples.map(sample => sample[field]).filter((value): value is number => value !== null);
-          return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-        };
         const last = state.last;
-        const cache = {
-          scope: "This conversation and exact model. Historical observations do not guarantee a future cache hit; missing counts are unknown, not zero.",
-          model: currentModel, last_response_model: last?.model ?? null,
-          last_observed_at: last ? new Date(last.at).toISOString() : null,
-          last_observed_seconds_ago: last ? Math.round((started - last.at) / 1000) : null,
-          last_turn: last?.model === currentModel ? { cache_read_tokens: last.read, cache_created_tokens: last.created } : null,
-          recent_same_model: { window_seconds: 120, turns: sameSamples.length, cache_read_tokens_avg: average("read"), cache_created_tokens_avg: average("created") },
-        };
+        const cache = summarizeCacheRun(state.observations, currentModel, started);
         const routingInput = { prompt: turn.prompt, currentTier, currentModel, currentEffort: state.effort.effort ?? body.reasoning?.effort, contextTokens: Math.round(JSON.stringify(body.input ?? "").length / 4), candidates, ...(config.sendRecentContext ? { recentContext: recentContext(body) } : {}), cache };
         let result: RoutingResult;
         try { result = await route(routingInput); }
@@ -167,11 +179,15 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
             responseKeys.set(value.responseId, prepared.key);
             if (responseKeys.size > 1000) responseKeys.delete(responseKeys.keys().next().value!);
           }
-          const sample = { ...value, at: Date.now(), turn: turnId };
-          state.last = sample;
-          state.usage = state.usage.filter(previous => previous.turn !== sample.turn || previous.model !== sample.model).filter(previous => sample.at - previous.at < 120000);
-          if (sample.read !== null || sample.created !== null) state.usage.push(sample);
-          state.usage = state.usage.slice(-80);
+          const now = Date.now();
+          const isCompletion = value.read !== null || value.created !== null || value.responseId != null;
+          state.last = { ...value, at: now };
+          if (isCompletion || value.model !== body!.model) {
+            const obs: ResponseObservation = { model: value.model, read: value.read, created: value.created, at: now };
+            state.observations = state.observations.filter(prev => prev.at !== now || prev.model !== obs.model);
+            state.observations.push(obs);
+            state.observations = state.observations.filter(prev => now - prev.at <= 3_600_000).slice(-200);
+          }
         };
         usage({ model: body!.model, read: null, created: null });
         const contentType = response.headers.get("content-type");

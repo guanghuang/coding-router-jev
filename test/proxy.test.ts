@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { configFromEnv } from "../src/config";
-import { AUTO_MODEL, startProxy } from "../src/proxy";
+import { AUTO_MODEL, startProxy, summarizeCacheRun } from "../src/proxy";
 import { buildRequest, type Route, type RoutingInput } from "../src/router";
 import type { CodexBody, Item } from "../src/types";
 
@@ -48,7 +48,10 @@ test("proxy routes once per turn, keeps tool continuations, streams notices once
     await send([first, { role: "assistant", content: "previous answer" }, second]);
     expect(inputs).toHaveLength(2);
     expect(inputs[1].recentContext?.previous_assistant_excerpt).toBe("previous answer");
-    expect(inputs[1].cache?.last_response_model).toBe("gpt-6.1-sol");
+    expect(inputs[1].cache?.window).toBe("up to 1 hour, stopping at the most recent model switch");
+    expect(typeof inputs[1].cache?.observed_responses).toBe("number");
+    expect(inputs[1].cache).not.toHaveProperty("model");
+    expect(inputs[1].cache).not.toHaveProperty("last_response_model");
     const last = captured.at(-1)!.body;
     expect(last.reasoning?.effort).toBe("low");
     expect((last.input as Item[]).some(item => item.type === "configuration_update" && item.reasoning?.effort === "high")).toBe(true);
@@ -476,4 +479,137 @@ test("explicit model requests also strip jev notices from upstream history", asy
     expect(forwarded.some(item => typeof item.id === "string" && item.id.startsWith("jev-"))).toBe(false);
     expect(forwarded.some(item => item.content === "real answer")).toBe(true);
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("summarizeCacheRun: 30-minute-old observation is included", () => {
+  const now = Date.now();
+  const observations = [{ model: "gpt-6-luna", read: 5000, created: 1000, at: now - 1_800_000 }];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(1);
+  expect(result.newest_seconds_ago).toBe(1800);
+  expect(result.oldest_seconds_ago).toBe(1800);
+  expect(result.cache_read_tokens_avg).toBe(5000);
+  expect(result.cache_created_tokens_avg).toBe(1000);
+});
+
+test("summarizeCacheRun: 61-minute-old observation is excluded", () => {
+  const now = Date.now();
+  const observations = [{ model: "gpt-6-luna", read: 5000, created: 1000, at: now - 3_660_000 }];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(0);
+  expect(result.newest_seconds_ago).toBeUndefined();
+  expect(result.oldest_seconds_ago).toBeUndefined();
+  expect(result.cache_read_tokens_avg).toBeNull();
+  expect(result.cache_created_tokens_avg).toBeNull();
+});
+
+test("summarizeCacheRun: model switch stops scan even with older matching entries", () => {
+  const now = Date.now();
+  const observations = [
+    { model: "gpt-6-luna", read: 1000, created: null, at: now - 600_000 },
+    { model: "gpt-6.1-sol", read: 2000, created: 500, at: now - 300_000 },
+    { model: "gpt-6-luna", read: 3000, created: 700, at: now - 60_000 },
+  ];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(1);
+  expect(result.newest_seconds_ago).toBe(60);
+  expect(result.oldest_seconds_ago).toBe(60);
+  expect(result.cache_read_tokens_avg).toBe(3000);
+  expect(result.cache_created_tokens_avg).toBe(700);
+});
+
+test("summarizeCacheRun: averages ignore null values independently per metric", () => {
+  const now = Date.now();
+  const observations = [
+    { model: "gpt-6-luna", read: null, created: 200, at: now - 120_000 },
+    { model: "gpt-6-luna", read: 4000, created: null, at: now - 60_000 },
+    { model: "gpt-6-luna", read: 6000, created: 800, at: now - 30_000 },
+  ];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(3);
+  expect(result.cache_read_tokens_avg).toBe(5000);
+  expect(result.cache_created_tokens_avg).toBe(500);
+});
+
+test("summarizeCacheRun: unknown-count responses still count and mark model switches", () => {
+  const now = Date.now();
+  const observations = [
+    { model: "gpt-6-luna", read: 1000, created: null, at: now - 300_000 },
+    { model: "gpt-6.1-sol", read: null, created: null, at: now - 180_000 },
+    { model: "gpt-6-luna", read: 5000, created: 200, at: now - 60_000 },
+  ];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(1);
+  expect(result.cache_read_tokens_avg).toBe(5000);
+  expect(result.cache_created_tokens_avg).toBe(200);
+});
+
+test("summarizeCacheRun: unknown-count same-model observations still increase observed_responses", () => {
+  const now = Date.now();
+  const observations = [
+    { model: "gpt-6-luna", read: null, created: null, at: now - 120_000 },
+    { model: "gpt-6-luna", read: null, created: null, at: now - 60_000 },
+    { model: "gpt-6-luna", read: 3000, created: 100, at: now - 30_000 },
+  ];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(3);
+  expect(result.cache_read_tokens_avg).toBe(3000);
+  expect(result.cache_created_tokens_avg).toBe(100);
+});
+
+test("summarizeCacheRun: newest observation is different model yields zero count", () => {
+  const now = Date.now();
+  const observations = [
+    { model: "gpt-6-luna", read: 1000, created: 500, at: now - 120_000 },
+    { model: "gpt-6.1-sol", read: 2000, created: 200, at: now - 60_000 },
+  ];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(0);
+  expect(result.newest_seconds_ago).toBeUndefined();
+  expect(result.oldest_seconds_ago).toBeUndefined();
+  expect(result.cache_read_tokens_avg).toBeNull();
+  expect(result.cache_created_tokens_avg).toBeNull();
+});
+
+test("summarizeCacheRun: exact 1-hour boundary is included", () => {
+  const now = Date.now();
+  const observations = [{ model: "gpt-6-luna", read: 1000, created: 200, at: now - 3_600_000 }];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(1);
+  expect(result.newest_seconds_ago).toBe(3600);
+});
+
+test("summarizeCacheRun: empty history yields zero count, null averages, no ages", () => {
+  const now = Date.now();
+  const result = summarizeCacheRun([], "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(0);
+  expect(result.newest_seconds_ago).toBeUndefined();
+  expect(result.oldest_seconds_ago).toBeUndefined();
+  expect(result.cache_read_tokens_avg).toBeNull();
+  expect(result.cache_created_tokens_avg).toBeNull();
+  expect(result.window).toBe("up to 1 hour, stopping at the most recent model switch");
+});
+
+test("existing session fields remain in the built JEV request", () => {
+  const input: RoutingInput = {
+    prompt: "test prompt",
+    currentTier: "fast",
+    currentModel: "gpt-6-luna",
+    currentEffort: "medium",
+    contextTokens: 42000,
+    candidates: [{ tier: "fast" as const, id: "gpt-6-luna", description: "Luna", efforts: ["low", "medium", "high"] }],
+    cache: summarizeCacheRun([], "gpt-6-luna", Date.now()),
+  };
+  const request = buildRequest(input);
+  const state = request.state as Record<string, unknown>;
+  const session = state.session as Record<string, unknown>;
+  expect(session.current_tier).toBe("fast");
+  expect(session.current_model).toBe("gpt-6-luna");
+  expect(session.current_reasoning_effort).toBe("medium");
+  expect(session.context_tokens).toBe(42000);
+  const cache = session.cache as Record<string, unknown>;
+  expect(cache.window).toBe("up to 1 hour, stopping at the most recent model switch");
+  expect(cache.observed_responses).toBe(0);
+  expect(cache).not.toHaveProperty("model");
+  expect(cache).not.toHaveProperty("last_response_model");
 });

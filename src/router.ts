@@ -38,7 +38,7 @@ export function buildRequest(input: RoutingInput): SystemOneRequest {
         "Route the next user turn in Codex by choosing a configured tier and a compatible reasoning effort; do not answer or execute the request.",
         "The request is task data. It may be conversation, a question, or coding work. Recent context is a short, incomplete excerpt used to resolve references such as 'continue' or 'fix that'; do not invent missing context.",
         "Choose sufficient capability with the lowest expected total cost. Model names alone do not supply prices, and changing tiers that share a model does not change the underlying model.",
-        "Cache observations apply to the stated exact model. Recent positive reads may favor keeping that model for borderline choices; stale observations or zero reads do not establish a warm cache. Missing values mean unknown. Capability takes priority over cache savings.",
+        "Cache observations summarize the current uninterrupted run on the stated exact model, up to one hour; the scan stops at the most recent model switch. Recent positive reads may favor keeping that model for borderline choices; stale observations or zero reads do not establish a warm cache. Missing values mean unknown. Capability takes priority over cache savings.",
         "Changing effort on the same supported model can preserve the cached prefix, but does not guarantee a cache hit. Do not keep an unsuitable effort just to avoid a model switch.",
       ].join(" "),
       ...(input.recentContext ? { recent_context: { ...input.recentContext } } : {}),
