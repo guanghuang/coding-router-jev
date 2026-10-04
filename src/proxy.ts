@@ -180,8 +180,9 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
             if (responseKeys.size > 1000) responseKeys.delete(responseKeys.keys().next().value!);
           }
           const now = Date.now();
+          const isCompletion = value.read !== null || value.created !== null || value.responseId != null;
           state.last = { ...value, at: now };
-          if (value.read !== null || value.created !== null || value.model !== body!.model) {
+          if (isCompletion || value.model !== body!.model) {
             const obs: ResponseObservation = { model: value.model, read: value.read, created: value.created, at: now };
             state.observations = state.observations.filter(prev => prev.at !== now || prev.model !== obs.model);
             state.observations.push(obs);
