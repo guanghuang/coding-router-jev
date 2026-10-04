@@ -3,10 +3,19 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 export const DEFAULT_LOG_DIR = join(tmpdir(), "coding-router-jev");
-const SESSION_LOG_PATTERN = /^codex-.+\.jsonl$/;
 
-export function cleanupStaleLogs(directory: string, retentionDays: number): void {
+export type AgentPrefix = "codex" | "pi";
+const SUPPORTED_PREFIXES: ReadonlySet<string> = new Set<AgentPrefix>(["codex", "pi"]);
+
+const AGENT_LOG_PATTERNS: Record<AgentPrefix, RegExp> = {
+  codex: /^codex-.+\.jsonl$/,
+  pi: /^pi-.+\.jsonl$/,
+};
+
+export function cleanupStaleLogs(directory: string, retentionDays: number, agent: AgentPrefix = "codex"): void {
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) return;
+  const pattern = AGENT_LOG_PATTERNS[agent];
+  if (!pattern) return;
   let entries: string[];
   try {
     entries = readdirSync(directory);
@@ -18,7 +27,7 @@ export function cleanupStaleLogs(directory: string, retentionDays: number): void
   }
   const cutoff = Date.now() - retentionDays * 86_400_000;
   for (const entry of entries) {
-    if (!SESSION_LOG_PATTERN.test(entry)) continue;
+    if (!pattern.test(entry)) continue;
     const filePath = join(directory, entry);
     try {
       const info = lstatSync(filePath);
@@ -30,10 +39,13 @@ export function cleanupStaleLogs(directory: string, retentionDays: number): void
   }
 }
 
-export function sessionHistory(session: string, directory = DEFAULT_LOG_DIR) {
+export function sessionHistory(session: string, directory = DEFAULT_LOG_DIR, agent: AgentPrefix = "codex") {
+  if (!SUPPORTED_PREFIXES.has(agent)) {
+    throw new Error(`Unsupported agent prefix: ${agent}. Supported: ${[...SUPPORTED_PREFIXES].join(", ")}`);
+  }
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
-  const path = join(directory, `codex-${session.replace(/[^\w-]/g, "")}.jsonl`);
+  const path = join(directory, `${agent}-${session.replace(/[^\w-]/g, "")}.jsonl`);
   return {
     path,
     append(record: unknown) {

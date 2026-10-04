@@ -8,7 +8,9 @@ import {
   formatSummary,
   formatDetail,
   queryLogs,
+  isObservation,
   type LogRecord,
+  type ResponseObservation,
 } from "../src/jev-logs";
 
 function makeRecord(overrides: Partial<LogRecord> = {}): LogRecord {
@@ -344,5 +346,66 @@ describe("queryLogs", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("isObservation", () => {
+  test("returns true for response-observation type", () => {
+    const obs: ResponseObservation = {
+      type: "response-observation",
+      decision_id: "pi-1",
+      input_tokens: 5000,
+    };
+    expect(isObservation(obs)).toBe(true);
+  });
+
+  test("returns false for decision records", () => {
+    expect(isObservation(makeRecord())).toBe(false);
+  });
+
+  test("returns false for null/undefined", () => {
+    expect(isObservation(null)).toBe(false);
+    expect(isObservation(undefined)).toBe(false);
+  });
+
+  test("returns false for wrong type field", () => {
+    expect(isObservation({ type: "decision" })).toBe(false);
+  });
+});
+
+describe("formatSummary — Pi fields", () => {
+  test("shows effective effort when present", () => {
+    const summary = formatSummary(makeRecord({ effective_effort: "high" }));
+    expect(summary).toContain("Effective effort: high");
+  });
+
+  test("shows provider model when present", () => {
+    const summary = formatSummary(makeRecord({ provider_model: "openai-codex/gpt-6.1-sol" }));
+    expect(summary).toContain("Provider model: openai-codex/gpt-6.1-sol");
+  });
+
+  test("falls back to Effort when no effective_effort", () => {
+    const summary = formatSummary(makeRecord({ effective_effort: undefined }));
+    expect(summary).toContain("Effort: high");
+    expect(summary).not.toContain("Effective effort:");
+  });
+});
+
+describe("formatDetail — Pi fields", () => {
+  test("shows requested vs effective effort when different", () => {
+    const detail = formatDetail(makeRecord({ requested_effort: "xhigh", effective_effort: "high" }));
+    expect(detail).toContain("Requested effort: xhigh");
+    expect(detail).toContain("effective: high");
+  });
+
+  test("does not show requested effort when same as effective", () => {
+    const detail = formatDetail(makeRecord({ requested_effort: "high", effective_effort: "high" }));
+    expect(detail).not.toContain("Requested effort:");
+  });
+
+  test("shows capacity status", () => {
+    const detail = formatDetail(makeRecord({ capacity_status: "no-eligible", capacity_reason: "all rejected" }));
+    expect(detail).toContain("Capacity: no-eligible");
+    expect(detail).toContain("all rejected");
   });
 });
