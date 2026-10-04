@@ -308,19 +308,18 @@ function Install-Binary {
         if (Test-Path $backupPath) {
             try {
                 Rename-Item -Path $backupPath -NewName "$Script:BinaryName.exe" -Force
-                Write-Log "Restored previous binary from backup."
+                Exit-WithError "upgrade failed; previous installation restored at $dest. The new binary could not be copied."
             }
             catch {
-                Write-Warning "Could not restore previous binary. It may still be at $backupPath"
+                Exit-WithError "upgrade failed and restore failed. The previous binary may be at $backupPath — rename it to $Script:BinaryName.exe manually."
             }
         }
         else {
-            # First-time install failed — remove partial file
             if (Test-Path $dest) {
                 Remove-Item $dest -Force -ErrorAction SilentlyContinue
             }
+            Exit-WithError "failed to install binary to $dest."
         }
-        Exit-WithError "failed to install binary to $dest."
     }
 
     # Clean up backup
