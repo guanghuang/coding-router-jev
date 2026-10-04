@@ -6,6 +6,36 @@ A TypeScript/Bun wrapper that routes Codex user turns through JEV. The command i
 
 Both installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
 
+## Install from release (recommended)
+
+Download a prebuilt standalone binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases). No Bun installation required.
+
+```sh
+# Download the latest release (requires gh CLI and repository access)
+gh release download --repo guanghuang/coding-router-jev --pattern 'codex-jev-linux-x64'
+chmod +x codex-jev-linux-x64
+mv codex-jev-linux-x64 ~/.local/bin/codex-jev
+```
+
+Verify the download checksum:
+
+```sh
+gh release download --repo guanghuang/coding-router-jev --pattern 'SHA256SUMS'
+sha256sum --check SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
+```
+
+### Platform support
+
+| Binary | OS | Architecture | Notes |
+|--------|----|-------------|-------|
+| `codex-jev-darwin-arm64` | macOS | Apple Silicon | Unsigned |
+| `codex-jev-darwin-x64` | macOS | Intel | Unsigned |
+| `codex-jev-linux-arm64` | Linux | ARM64 | glibc required |
+| `codex-jev-linux-x64` | Linux | x64 | glibc, SSE4.2 minimum |
+| `codex-jev-windows-x64.exe` | Windows | x64 | Unsigned |
+
+Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; macOS Gatekeeper may require `xattr -d com.apple.quarantine codex-jev-darwin-*` after download.
+
 ## Install from source (Bun required)
 
 Running from source requires [Bun](https://bun.sh/).

@@ -1,0 +1,245 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: "1.4.2"
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run check
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Build launcher (current platform)
+        run: bun run build
+
+      - name: Verify version consistency
+        id: version
+        run: |
+          PKG_VERSION=$(bun -e "console.log(require('./package.json').version)")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "package.json version: $PKG_VERSION"
+          echo "Tag version:          $TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Version mismatch: package.json ($PKG_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build binaries
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cross-compile all targets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          compile() {
+            local target="$1" outfile="$2"
+            echo "==> Compiling $target -> dist/$outfile"
+            bun build src/cli.ts --compile --target="$target" --outfile "dist/$outfile"
+            ls -lh "dist/$outfile"
+          }
+
+          compile bun-darwin-arm64 codex-jev-darwin-arm64
+          compile bun-darwin-x64   codex-jev-darwin-x64
+          compile bun-linux-arm64  codex-jev-linux-arm64
+          compile bun-linux-x64    codex-jev-linux-x64
+          compile bun-windows-x64  codex-jev-windows-x64.exe
+
+      - name: Smoke test Linux x64 binary
+        run: |
+          chmod +x dist/codex-jev-linux-x64
+          echo "--- Smoke test: binary runs and exits ---"
+          dist/codex-jev-linux-x64 --help || SMOKE_EXIT=$?
+          echo "Exit code: ${SMOKE_EXIT:-0}"
+          echo "Smoke test: Linux x64 binary executed successfully"
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum \
+            codex-jev-darwin-arm64 \
+            codex-jev-darwin-x64 \
+            codex-jev-linux-arm64 \
+            codex-jev-linux-x64 \
+            codex-jev-windows-x64.exe \
+            > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: |
+            dist/codex-jev-darwin-arm64
+            dist/codex-jev-darwin-x64
+            dist/codex-jev-linux-arm64
+            dist/codex-jev-linux-x64
+            dist/codex-jev-windows-x64.exe
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 5
+
+  release:
+    name: Create release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-binaries
+          path: dist
+
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+
+      - name: Check for existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ github.ref_name }}" --json tagName >/dev/null 2>&1; then
+            EXISTING_SUMS=$(gh release download "${{ github.ref_name }}" --pattern SHA256SUMS --output - 2>/dev/null || true)
+            if [ -n "$EXISTING_SUMS" ]; then
+              NEW_SUMS=$(cat dist/SHA256SUMS)
+              if [ "$EXISTING_SUMS" != "$NEW_SUMS" ]; then
+                echo "::error::Release ${{ github.ref_name }} already exists with different checksums. Refusing to overwrite."
+                exit 1
+              fi
+              echo "Release already exists with matching checksums; skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          IS_PRERELEASE=false
+          if echo "$VERSION" | grep -qE '[-]'; then
+            IS_PRERELEASE=true
+          fi
+
+          PRERELEASE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          cat > release-notes.md << 'NOTES'
+          ## codex-jev ${{ github.ref_name }}
+
+          Standalone launcher binaries for macOS, Linux, and Windows.
+
+          ### Platform support
+
+          | Binary | OS | Architecture | Notes |
+          |--------|----|-------------|-------|
+          | `codex-jev-darwin-arm64` | macOS | Apple Silicon (ARM64) | Unsigned |
+          | `codex-jev-darwin-x64` | macOS | Intel (x64) | Unsigned |
+          | `codex-jev-linux-arm64` | Linux | ARM64 | glibc required |
+          | `codex-jev-linux-x64` | Linux | x64 | glibc required; SSE4.2 minimum |
+          | `codex-jev-windows-x64.exe` | Windows | x64 | Unsigned |
+
+          ### Prerequisites
+
+          - **Codex CLI** (`codex`) must be installed and authenticated separately.
+          - The router does **not** bundle or install Codex.
+
+          ### Download (private repository)
+
+          Use `gh` CLI or the GitHub API with a personal access token:
+
+          ```sh
+          # Download all assets for this release
+          gh release download ${{ github.ref_name }} --repo guanghuang/coding-router-jev
+
+          # Or download a specific binary
+          gh release download ${{ github.ref_name }} --repo guanghuang/coding-router-jev --pattern 'codex-jev-linux-x64'
+          ```
+
+          ### Verify checksums
+
+          ```sh
+          sha256sum --check SHA256SUMS
+          ```
+
+          On macOS, use `shasum -a 256 --check SHA256SUMS`.
+
+          ### Known limitations
+
+          - Binaries are **unsigned**. macOS Gatekeeper or Windows SmartScreen may prompt. On macOS: `xattr -d com.apple.quarantine codex-jev-darwin-*` after download.
+          - **Alpine/musl Linux** and **Windows ARM64** are not supported.
+          - No automatic updater; check releases manually.
+          - npm publication, macOS notarization, and Windows signing are separate follow-ups.
+          NOTES
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' release-notes.md
+
+          gh release create "${{ github.ref_name }}" \
+            --title "codex-jev ${{ github.ref_name }}" \
+            --notes-file release-notes.md \
+            $PRERELEASE_FLAG \
+            dist/codex-jev-darwin-arm64 \
+            dist/codex-jev-darwin-x64 \
+            dist/codex-jev-linux-arm64 \
+            dist/codex-jev-linux-x64 \
+            dist/codex-jev-windows-x64.exe \
+            dist/SHA256SUMS
