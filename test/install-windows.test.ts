@@ -1,12 +1,6 @@
 import { expect, test, describe, beforeAll, afterAll } from "bun:test";
 import {
-  mkdtemp,
-  rm,
-  readdir,
-  stat,
-  readFile,
-  writeFile,
-  mkdir,
+  mkdtemp, rm, readdir, stat, readFile, writeFile, mkdir,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,7 +13,6 @@ interface FixtureServer {
   stop(): void;
 }
 
-/** Start a minimal HTTP server that serves fixture release assets. */
 function startFixtureServer(
   fixturesDir: string,
   opts?: { failAuth?: boolean; missing?: boolean },
@@ -66,35 +59,15 @@ function startFixtureServer(
   return server as unknown as FixtureServer;
 }
 
-/** Check if pwsh (PowerShell 7+) is available. */
-async function hasPwsh(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn(["pwsh", "-Version"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    await proc.exited;
-    return proc.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
-
-let pwshAvailable = false;
-
-/**
- * Run install.ps1 via pwsh against a local fixture server.
- * The script is patched to point GitHub API/download URLs at the local server.
- */
 async function runInstallerWithServer(
   server: FixtureServer,
   installDir: string,
-  opts?: { token?: string; version?: string; failArch?: string },
+  opts?: { token?: string; version?: string; failArch?: string; envVersion?: string },
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const baseUrl = `http://localhost:${server.port}`;
   const script = await readFile(INSTALL_SCRIPT, "utf8");
 
-  const patched = script
+  let patched = script
     .replace(
       /https:\/\/api\.github\.com\/repos\/\$Script:Repo/g,
       `${baseUrl}/repos/\$Script:Repo`,
@@ -106,6 +79,14 @@ async function runInstallerWithServer(
 
   await mkdir(installDir, { recursive: true });
   const patchedScript = join(installDir + "-script.ps1");
+
+  if (opts?.failArch) {
+    patched = patched.replace(
+      /function Test-Architecture \{[\s\S]*?^\}/m,
+      `function Test-Architecture {\n    Exit-WithError "unsupported architecture: ${opts.failArch}. Only Windows x64 is supported."\n}`,
+    );
+  }
+
   await writeFile(patchedScript, patched);
 
   const args: string[] = [
@@ -131,18 +112,8 @@ async function runInstallerWithServer(
     env.GH_TOKEN = opts.token;
   }
 
-  // Override architecture detection if needed for testing
-  if (opts?.failArch) {
-    const archOverride = `
-function Test-Architecture {
-    Exit-WithError "unsupported architecture: ${opts.failArch}. Only Windows x64 is supported."
-}
-`;
-    const patchedWithArch = patched.replace(
-      /function Test-Architecture \{[\s\S]*?^\}/m,
-      archOverride.trim(),
-    );
-    await writeFile(patchedScript, patchedWithArch);
+  if (opts?.envVersion) {
+    env.CODEX_JEV_VERSION = opts.envVersion;
   }
 
   const proc = Bun.spawn(["pwsh", ...args], {
@@ -160,9 +131,19 @@ function Test-Architecture {
 
 describe("install.ps1", () => {
   let tempDir: string;
+  let pwshAvailable = false;
 
   beforeAll(async () => {
-    pwshAvailable = await hasPwsh();
+    try {
+      const proc = Bun.spawn(["pwsh", "-Version"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await proc.exited;
+      pwshAvailable = proc.exitCode === 0;
+    } catch {
+      pwshAvailable = false;
+    }
     if (!pwshAvailable) {
       console.warn(
         "Skipping install.ps1 tests: pwsh (PowerShell 7+) is not available.",
@@ -214,6 +195,7 @@ describe("install.ps1", () => {
     expect(stdout).toContain("-Dir");
     expect(stdout).toContain("Uninstall");
     expect(stdout).toContain("Rollback");
+    expect(stdout).toContain("user PATH");
   });
 
   describe("successful install", () => {
@@ -238,6 +220,24 @@ describe("install.ps1", () => {
       const binaryPath = join(installDir, "codex-jev.exe");
       const info = await stat(binaryPath);
       expect(info.size).toBeGreaterThan(0);
+    });
+
+    test("resolves latest release when no version pinned", async () => {
+      if (!pwshAvailable) return;
+      const server = startFixtureServer(FIXTURES);
+      const installDir = join(tempDir, "install-latest");
+
+      const { stdout, stderr, exitCode } = await runInstallerWithServer(
+        server,
+        installDir,
+      );
+      server.stop();
+
+      const combined = stdout + stderr;
+      expect(exitCode).toBe(0);
+      expect(combined).toContain("Resolving latest release...");
+      expect(combined).toContain("Latest release: v0.1.0");
+      expect(combined).not.toContain("Pinned version:");
     });
 
     test("upgrade replaces existing binary", async () => {
@@ -282,7 +282,7 @@ describe("install.ps1", () => {
   });
 
   describe("checksum verification", () => {
-    test("rejects mismatched checksums", async () => {
+    test("rejects mismatched checksums and preserves existing binary", async () => {
       if (!pwshAvailable) return;
       const installDir = join(tempDir, "install-bad-checksum");
       await mkdir(installDir, { recursive: true });
@@ -312,6 +312,9 @@ describe("install.ps1", () => {
 
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("checksum mismatch");
+
+      const content = await readFile(join(installDir, "codex-jev.exe"), "utf8");
+      expect(content).toBe("existing-binary");
     });
   });
 
@@ -324,12 +327,10 @@ describe("install.ps1", () => {
       const { stderr, exitCode } = await runInstallerWithServer(
         server,
         installDir,
-        { version: "v0.1.0" },
       );
       server.stop();
 
       expect(exitCode).not.toBe(0);
-      // PowerShell error output may vary; check for relevant message
       expect(stderr.toLowerCase()).toMatch(/not found|404|release/);
     });
 
@@ -403,6 +404,23 @@ describe("install.ps1", () => {
       expect(combined).toContain("Pinned version: v0.1.0");
       expect(combined).not.toContain("Resolving latest");
     });
+
+    test("CODEX_JEV_VERSION env var works like -Version", async () => {
+      if (!pwshAvailable) return;
+      const server = startFixtureServer(FIXTURES);
+      const installDir = join(tempDir, "install-env-version");
+
+      const { stdout, stderr, exitCode } = await runInstallerWithServer(
+        server,
+        installDir,
+        { envVersion: "v0.1.0" },
+      );
+      server.stop();
+
+      const combined = stdout + stderr;
+      expect(exitCode).toBe(0);
+      expect(combined).toContain("Pinned version: v0.1.0");
+    });
   });
 
   describe("config preservation", () => {
@@ -429,7 +447,7 @@ describe("install.ps1", () => {
   });
 
   describe("temp directory cleanup", () => {
-    test("cleans up temp files after install", async () => {
+    test("cleans up temp files after successful install", async () => {
       if (!pwshAvailable) return;
       const server = startFixtureServer(FIXTURES);
       const installDir = join(tempDir, "install-cleanup-win");
@@ -443,7 +461,34 @@ describe("install.ps1", () => {
       const leftover = tmpFiles.filter((f) =>
         f.startsWith("codex-jev-install-"),
       );
-      expect(leftover.length).toBeLessThanOrEqual(1);
+      expect(leftover.length).toBe(0);
+    });
+
+    test("cleans up temp files on checksum failure", async () => {
+      if (!pwshAvailable) return;
+      const badFixtures = join(tempDir, "bad-checksum-cleanup-win");
+      await mkdir(badFixtures, { recursive: true });
+      for (const f of await readdir(FIXTURES)) {
+        const src = await readFile(join(FIXTURES, f));
+        if (f === "SHA256SUMS") {
+          await writeFile(join(badFixtures, f), await readFile(join(FIXTURES, "SHA256SUMS.bad")));
+        } else if (!f.endsWith(".bad")) {
+          await writeFile(join(badFixtures, f), src);
+        }
+      }
+      const badServer = startFixtureServer(badFixtures);
+      const installDir = join(tempDir, "install-cleanup-fail-win");
+
+      await runInstallerWithServer(badServer, installDir, { version: "v0.1.0" });
+      badServer.stop();
+
+      const tmpFiles = await readdir(
+        process.env.TMPDIR || process.env.TEMP || "/tmp",
+      );
+      const leftover = tmpFiles.filter((f) =>
+        f.startsWith("codex-jev-install-"),
+      );
+      expect(leftover.length).toBe(0);
     });
   });
 });

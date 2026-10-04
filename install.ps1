@@ -15,7 +15,9 @@
       Get-Content install.ps1   # review the script
       .\install.ps1
 
-    The installer never modifies ~/.coding-router-jev.env.
+    The installer never modifies ~/.coding-router-jev.env. It updates the
+    user PATH (not the system PATH) without administrator privileges or
+    duplicate entries.
 
 .PARAMETER Version
     Pin a specific release tag (e.g. v0.1.0). Default: latest release.
@@ -48,6 +50,8 @@ $Script:BinaryName = 'codex-jev'
 $Script:AssetName = 'codex-jev-windows-x64.exe'
 $Script:TempDir = $null
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 function Write-Log { param([string]$Message) Write-Host $Message }
 
 function Exit-WithError {
@@ -55,6 +59,8 @@ function Exit-WithError {
     Write-Error "error: $Message"
     exit 1
 }
+
+# ── Help ─────────────────────────────────────────────────────────────────────
 
 function Show-Help {
     @"
@@ -75,8 +81,9 @@ Environment:
   GH_TOKEN           GitHub token for private repository access
 
 The installer downloads a prebuilt binary, verifies its SHA-256
-checksum, and places it in the install directory. It never modifies
-~/.coding-router-jev.env.
+checksum, and places it in the install directory. It adds the install
+directory to the user PATH (not the system PATH) without administrator
+privileges or duplicate entries. It never modifies ~/.coding-router-jev.env.
 
 Prerequisites:
   The Codex CLI (codex) must be installed and authenticated separately.
@@ -90,6 +97,8 @@ Rollback:
   .\install.ps1 -Version v0.1.0   (pin the older version)
 "@ | Write-Host
 }
+
+# ── Architecture detection ───────────────────────────────────────────────────
 
 function Test-Architecture {
     $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
@@ -106,6 +115,8 @@ function Test-Architecture {
         }
     }
 }
+
+# ── Version resolution ───────────────────────────────────────────────────────
 
 function Resolve-ReleaseVersion {
     param([string]$PinnedVersion)
@@ -126,22 +137,25 @@ function Resolve-ReleaseVersion {
     }
 
     try {
-        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 60 -ErrorAction Stop
     }
     catch {
         $statusCode = $null
         if ($_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
+        if (-not $statusCode -and $_.Exception.PSObject.Properties['StatusCode']) {
+            $statusCode = [int]$_.Exception.StatusCode
+        }
         $msg = $_.Exception.Message
         if ($statusCode -eq 401 -or $statusCode -eq 403 -or $msg -match 'Bad credentials') {
-            Exit-WithError "authorization failed while trying to resolve latest version. Check GH_TOKEN."
+            Exit-WithError "authorization failed while trying to resolve latest version. Check GH_TOKEN or use 'gh auth login'."
         }
         elseif ($statusCode -eq 404 -or $msg -match 'Not Found') {
             Exit-WithError "release not found. Verify releases exist at https://github.com/$Script:Repo/releases"
         }
         else {
-            Exit-WithError "failed to resolve latest version. Check your network connection and GH_TOKEN. $_"
+            Exit-WithError "failed to resolve latest version. Check your network connection and GH_TOKEN."
         }
     }
 
@@ -153,6 +167,8 @@ function Resolve-ReleaseVersion {
     Write-Log "Latest release: $tag"
     return $tag
 }
+
+# ── Download ─────────────────────────────────────────────────────────────────
 
 function Get-ReleaseAsset {
     param(
@@ -178,25 +194,30 @@ function Get-ReleaseAsset {
     }
 
     try {
-        Invoke-WebRequest -Uri $dlUrl -OutFile $Destination -Headers $headers -ErrorAction Stop
+        Invoke-WebRequest -Uri $dlUrl -OutFile $Destination -Headers $headers -TimeoutSec 120 -ErrorAction Stop
     }
     catch {
         $statusCode = $null
         if ($_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
+        if (-not $statusCode -and $_.Exception.PSObject.Properties['StatusCode']) {
+            $statusCode = [int]$_.Exception.StatusCode
+        }
         $msg = $_.Exception.Message
         if ($statusCode -eq 401 -or $statusCode -eq 403 -or $msg -match 'Bad credentials') {
-            Exit-WithError "authorization failed while trying to download $AssetName. Check GH_TOKEN."
+            Exit-WithError "authorization failed while trying to download $AssetName. Check GH_TOKEN or use 'gh auth login'."
         }
         elseif ($statusCode -eq 404 -or $msg -match 'Not Found') {
             Exit-WithError "release asset not found: $AssetName for $Tag. Verify the version exists at https://github.com/$Script:Repo/releases"
         }
         else {
-            Exit-WithError "failed to download $AssetName. Check your network connection and GH_TOKEN. $_"
+            Exit-WithError "failed to download $AssetName. Check your network connection and GH_TOKEN."
         }
     }
 }
+
+# ── Checksum verification ────────────────────────────────────────────────────
 
 function Test-Checksum {
     param(
@@ -205,7 +226,13 @@ function Test-Checksum {
     )
 
     $fileName = Split-Path $FilePath -Leaf
-    $sumsContent = Get-Content $SumsFilePath -Raw
+
+    try {
+        $sumsContent = Get-Content $SumsFilePath -Raw
+    }
+    catch {
+        Exit-WithError "cannot read SHA256SUMS file: $_"
+    }
 
     $expectedHash = $null
     foreach ($line in $sumsContent -split "`n") {
@@ -220,7 +247,12 @@ function Test-Checksum {
         Exit-WithError "no checksum found for $fileName in SHA256SUMS"
     }
 
-    $actualHash = (Get-FileHash -Path $FilePath -Algorithm SHA256).Hash
+    try {
+        $actualHash = (Get-FileHash -Path $FilePath -Algorithm SHA256).Hash
+    }
+    catch {
+        Exit-WithError "cannot compute SHA-256 hash for $fileName`: $_"
+    }
 
     if ($actualHash -ine $expectedHash) {
         Exit-WithError @"
@@ -234,14 +266,21 @@ The downloaded file may be corrupted or tampered with.
     Write-Log "Checksum verified: $fileName"
 }
 
+# ── Install ──────────────────────────────────────────────────────────────────
+
 function Install-Binary {
     param(
         [string]$Source,
         [string]$DestDir
     )
 
-    if (-not (Test-Path $DestDir)) {
-        New-Item -Path $DestDir -ItemType Directory -Force | Out-Null
+    try {
+        if (-not (Test-Path $DestDir)) {
+            New-Item -Path $DestDir -ItemType Directory -Force | Out-Null
+        }
+    }
+    catch {
+        Exit-WithError "cannot create install directory $DestDir`: $_"
     }
 
     $dest = Join-Path $DestDir "$Script:BinaryName.exe"
@@ -249,7 +288,6 @@ function Install-Binary {
     if (Test-Path $dest) {
         Write-Log "Replacing existing installation at $dest"
 
-        # Handle potentially locked executable by renaming first
         $backupPath = "$dest.old"
         try {
             if (Test-Path $backupPath) {
@@ -266,15 +304,23 @@ function Install-Binary {
         Copy-Item -Path $Source -Destination $dest -Force
     }
     catch {
-        # Restore backup on failure
         $backupPath = Join-Path $DestDir "$Script:BinaryName.exe.old"
         if (Test-Path $backupPath) {
             try {
                 Rename-Item -Path $backupPath -NewName "$Script:BinaryName.exe" -Force
+                Write-Log "Restored previous binary from backup."
             }
-            catch {}
+            catch {
+                Write-Warning "Could not restore previous binary. It may still be at $backupPath"
+            }
         }
-        Exit-WithError "failed to install binary to $dest. $_"
+        else {
+            # First-time install failed — remove partial file
+            if (Test-Path $dest) {
+                Remove-Item $dest -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Exit-WithError "failed to install binary to $dest."
     }
 
     # Clean up backup
@@ -286,10 +332,11 @@ function Install-Binary {
     Write-Log "Installed $Script:BinaryName to $dest"
 }
 
+# ── PATH guidance ────────────────────────────────────────────────────────────
+
 function Update-UserPath {
     param([string]$InstallDir)
 
-    # Check if already in current session PATH
     $currentPath = $env:PATH
     $pathEntries = $currentPath -split ';' | Where-Object { $_ -ne '' }
     $normalizedDir = $InstallDir.TrimEnd('\')
@@ -303,28 +350,33 @@ function Update-UserPath {
         Write-Log "Added $InstallDir to current session PATH."
     }
 
-    # Check and update persistent user PATH
-    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-    if (-not $userPath) { $userPath = '' }
+    try {
+        $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+        if (-not $userPath) { $userPath = '' }
 
-    $userEntries = $userPath -split ';' | Where-Object { $_ -ne '' }
-    $alreadyPersisted = $userEntries | Where-Object {
-        $_.TrimEnd('\') -ieq $normalizedDir
+        $userEntries = $userPath -split ';' | Where-Object { $_ -ne '' }
+        $alreadyPersisted = $userEntries | Where-Object {
+            $_.TrimEnd('\') -ieq $normalizedDir
+        }
+
+        if (-not $alreadyPersisted) {
+            $newUserPath = if ($userPath) { "$InstallDir;$userPath" } else { $InstallDir }
+            [Environment]::SetEnvironmentVariable('PATH', $newUserPath, 'User')
+            Write-Log "Added $InstallDir to user PATH (persistent)."
+            Write-Log ""
+            Write-Log "The install directory is available in this session."
+            Write-Log "Open a new terminal for other shells to pick up the change."
+        }
+        else {
+            Write-Log "Install directory already in user PATH."
+        }
+    }
+    catch {
+        Write-Warning "Could not update persistent user PATH: $_"
+        Write-Log "Add the install directory to your PATH manually:"
+        Write-Log "  `$env:PATH = `"$InstallDir;`$env:PATH`""
     }
 
-    if (-not $alreadyPersisted) {
-        $newUserPath = if ($userPath) { "$InstallDir;$userPath" } else { $InstallDir }
-        [Environment]::SetEnvironmentVariable('PATH', $newUserPath, 'User')
-        Write-Log "Added $InstallDir to user PATH (persistent)."
-        Write-Log ""
-        Write-Log "The install directory is available in this session."
-        Write-Log "Open a new terminal for other shells to pick up the change."
-    }
-    else {
-        Write-Log "Install directory already in user PATH."
-    }
-
-    # Warn about shadowing
     $existing = Get-Command $Script:BinaryName -ErrorAction SilentlyContinue
     if ($existing -and $existing.Source -and
         $existing.Source -ine (Join-Path $InstallDir "$Script:BinaryName.exe")) {
@@ -334,6 +386,8 @@ function Update-UserPath {
         Write-Log "to use the installer-managed binary."
     }
 }
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
 
 function Remove-TempDir {
     if ($Script:TempDir -and (Test-Path $Script:TempDir)) {
@@ -357,7 +411,25 @@ function Main {
         $Dir = $env:INSTALL_DIR
     }
 
-    $installDir = if ($Dir) { $Dir } else { Join-Path $env:LOCALAPPDATA 'coding-router-jev\bin' }
+    # Validate install directory does not contain path separator injection
+    if ($Dir -and ($Dir -match '[;]' -or $Dir -match '[\r\n]')) {
+        Exit-WithError "install directory must not contain semicolons or newline characters: $Dir"
+    }
+
+    # Resolve default install directory with a guard for missing LOCALAPPDATA
+    if ($Dir) {
+        $installDir = $Dir
+    }
+    else {
+        $localAppData = $env:LOCALAPPDATA
+        if (-not $localAppData) {
+            $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+        }
+        if (-not $localAppData) {
+            Exit-WithError "cannot determine local application data directory. Set -Dir or `$env:LOCALAPPDATA."
+        }
+        $installDir = Join-Path $localAppData 'coding-router-jev\bin'
+    }
 
     Test-Architecture
 
