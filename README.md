@@ -6,6 +6,12 @@ A TypeScript/Bun wrapper that routes Codex user turns through JEV. The command i
 
 All installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
 
+## Distribution
+
+The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout.
+
+The repository is currently **private**. Installation commands that fetch raw files from `raw.githubusercontent.com` or download release assets without authentication will fail until the repository is made public. The sections below label each command as **Private repository** (requires `GH_TOKEN` or `gh auth login`) or **Public repository (once public)** so you can tell at a glance which commands work today.
+
 ## Install from release (recommended)
 
 Download a prebuilt standalone binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases). No Bun installation required.
@@ -74,6 +80,10 @@ rm ~/.local/bin/codex-jev    # or your custom --dir path
 
 The installer never modifies `~/.coding-router-jev.env` or shell startup files. When the install directory is not in your `PATH`, the script prints the export command to add. Repeating the install upgrades the binary without accumulating `PATH` entries.
 
+#### Upgrade and configuration preservation (macOS/Linux)
+
+Re-running `install.sh` (with or without `--version`) replaces only the `codex-jev` binary. Your configuration file (`~/.coding-router-jev.env`) and any shell startup changes you made are never touched. To upgrade to the latest release, run the same installer command you used originally. To pin or roll back, pass `--version`.
+
 ### One-command installer (Windows)
 
 The `install.ps1` PowerShell script downloads the Windows x64 binary, verifies its SHA-256 checksum, and installs it to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
@@ -140,7 +150,11 @@ Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev.exe"
 
 The installer adds the install directory to the user `PATH` (not the system `PATH`) without administrator privileges and without duplicate entries. The binary is available in the current session immediately; open a new terminal for other shells to pick it up. The installer never modifies `~/.coding-router-jev.env`. If a running `codex-jev.exe` locks the existing binary, the installer reports an actionable error.
 
-> **Note:** The binary is unsigned. Windows SmartScreen may prompt on first run. This is expected for unsigned executables distributed outside the Windows Store.
+#### Upgrade and configuration preservation (Windows)
+
+Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.exe`. Your configuration file (`~/.coding-router-jev.env`, which on Windows resolves to `%USERPROFILE%\.coding-router-jev.env`) and user `PATH` entries are preserved. If the existing binary is locked by a running process, the installer will report an error — close `codex-jev` first, then retry.
+
+> **Note:** The binary is unsigned. Windows SmartScreen may display a "Windows protected your PC" dialog on first run. Click **More info → Run anyway**. This is expected for unsigned executables distributed outside the Windows Store. The installer itself runs within PowerShell and does not trigger SmartScreen.
 
 ### Manual download
 
@@ -170,6 +184,22 @@ sha256sum --check SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
 | `codex-jev-windows-x64.exe` | Windows | x64 | Unsigned |
 
 Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; macOS Gatekeeper may require `xattr -d com.apple.quarantine codex-jev-darwin-*` after download.
+
+**Unsigned binary details by platform:**
+
+- **macOS**: Gatekeeper blocks unsigned binaries by default. After downloading, run `xattr -d com.apple.quarantine codex-jev-darwin-*` to remove the quarantine attribute. Alternatively, right-click the binary in Finder and choose **Open** to add a one-time exception.
+- **Windows**: SmartScreen displays a warning on first run. Click **More info → Run anyway**. The `install.ps1` installer does not trigger SmartScreen because it runs within PowerShell.
+- **Linux**: No code-signing enforcement. glibc is required; the installer detects musl/Alpine and exits with a clear error.
+
+**Minimum platform requirements:**
+
+| Platform | Minimum | Notes |
+|----------|---------|-------|
+| macOS (ARM64) | macOS 11 Big Sur | Apple Silicon native |
+| macOS (x64) | macOS 10.15 Catalina | Intel; Rosetta 2 runs ARM64 binaries on Apple Silicon |
+| Linux (x64) | glibc 2.17+, SSE4.2 | Tested on Ubuntu 22.04 |
+| Linux (ARM64) | glibc 2.17+ | Tested on Ubuntu 22.04 aarch64 |
+| Windows (x64) | Windows 10 1809+ | Native x64 only; ARM64 not supported |
 
 ## Install from source (Bun required)
 
@@ -236,6 +266,8 @@ Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and st
 ## Configuration
 
 Precedence is process environment, then `~/.coding-router-jev.env`, then built-in defaults. Bun may also load a working-directory `.env` into the process environment. All example values in `.env.example` are commented out, so copying the example does not override defaults.
+
+On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), so the configuration file is `%USERPROFILE%\.coding-router-jev.env`. On **macOS and Linux**, it is `$HOME/.coding-router-jev.env`. The file format is the same on all platforms.
 
 | Variable | Default / purpose |
 | --- | --- |
@@ -364,6 +396,100 @@ git push origin v0.2.0
 The `.github/workflows/release.yml` workflow validates, cross-compiles, and publishes release assets. The tag version must match `package.json`. Trigger `workflow_dispatch` manually to test the build pipeline without publishing — the version-tag check is skipped and the release job runs only on tag push.
 
 Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
+
+## Troubleshooting
+
+### "codex: command not found" or "codex-jev starts but cannot find Codex"
+
+The Codex CLI (`codex`) must be installed and authenticated separately. `codex-jev` is a routing wrapper, not a replacement for Codex. Install Codex from [github.com/openai/codex](https://github.com/openai/codex), run `codex auth`, and confirm `codex --help` works before using `codex-jev`.
+
+### "Do I need Bun?"
+
+**No**, if you use a prebuilt binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases) or an installer (`install.sh` / `install.ps1`). Bun is only required for [source installation](#install-from-source-bun-required) or local development.
+
+### PATH collisions — wrong `codex-jev` is found
+
+If `which codex-jev` (or `Get-Command codex-jev` on Windows) prints a different path than expected:
+
+```sh
+# macOS/Linux — check all locations
+which -a codex-jev
+
+# Windows PowerShell
+Get-Command codex-jev -All
+```
+
+Ensure the installer's directory appears **before** the conflicting directory in your `PATH`. The macOS/Linux installer prints the required `export` command when the directory is not in `PATH`. The Windows installer adds the directory automatically but a new terminal may be needed.
+
+### Unsupported architecture or OS
+
+The installer exits with a clear error on unsupported platforms:
+
+- **Alpine Linux / musl**: glibc is required. Use a glibc-based distribution.
+- **Windows ARM64**: Only Windows x64 is supported.
+- **Other architectures** (32-bit, RISC-V, etc.): Not supported.
+
+### Checksum verification failure
+
+If `sha256sum --check SHA256SUMS` fails or the installer reports a checksum mismatch:
+
+1. Re-download the binary and `SHA256SUMS` from the same release tag.
+2. Ensure you did not mix assets from different releases.
+3. If the mismatch persists, the download may have been corrupted in transit. Try a different network or download method (`gh release download` vs. direct URL).
+
+### Authentication errors (private repository)
+
+While the repository is private, all downloads require authentication:
+
+```sh
+# macOS/Linux — set GH_TOKEN before running the installer
+export GH_TOKEN="ghp_your_token"
+sh install.sh
+
+# Windows PowerShell
+$env:GH_TOKEN = "ghp_your_token"
+.\install.ps1
+```
+
+If you see `401` or `403` errors, verify your token has `repo` scope and has not expired. You can also authenticate via `gh auth login` (the `gh` CLI) before running the installer.
+
+### Release not found / unavailable
+
+- Verify releases exist at [github.com/guanghuang/coding-router-jev/releases](https://github.com/guanghuang/coding-router-jev/releases).
+- When pinning a version (`--version v0.1.0`), ensure the tag exists.
+- The `workflow_dispatch` trigger builds but does not publish a release; only tag pushes create releases.
+
+### macOS Gatekeeper blocks the binary
+
+After downloading a prebuilt binary outside an installer:
+
+```sh
+xattr -d com.apple.quarantine codex-jev-darwin-*
+```
+
+Or right-click the binary in Finder and choose **Open** to create a one-time exception.
+
+### Windows SmartScreen blocks the binary
+
+SmartScreen may show "Windows protected your PC" on first run. Click **More info → Run anyway**. This is expected for unsigned executables.
+
+### Routing history log location
+
+Session logs are written to `${TMPDIR:-/tmp}/coding-router-jev/` on macOS/Linux. On Windows, the equivalent `%TEMP%` directory is used. Logs contain user prompts — treat them as confidential.
+
+## Verification status
+
+Commands and installer behavior have been verified on:
+
+- **macOS (ARM64 and x64)**: `install.sh`, checksum verification, version pinning, upgrade, uninstall, PATH guidance, Gatekeeper quarantine removal.
+- **Linux (x64)**: `install.sh`, CI binary smoke test, checksum verification.
+- **Windows (x64)**: `install.ps1`, checksum verification, PATH management, SmartScreen behavior, locked-binary error handling.
+
+**Not yet verified:**
+
+- Linux ARM64 hardware (CI cross-compiles but does not run the ARM64 binary).
+- Interactive multi-turn routing sessions on all platforms (verified locally on macOS only).
+- ChatGPT desktop or Work integration (not implemented; not advertised).
 
 ## Attribution
 
