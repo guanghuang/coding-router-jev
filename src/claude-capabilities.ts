@@ -1,4 +1,4 @@
-import type { Candidate, CapacityInfo } from "./types";
+import type { Candidate, CapacityInfo, Tier } from "./types";
 
 /**
  * Thinking mode a Claude model supports.
@@ -94,16 +94,12 @@ function familyOf(modelId: string): string | undefined {
 }
 
 /**
- * Look up capabilities for a model ID. Exact match first, then latest
- * known model in the same family. Returns undefined for unknown/custom IDs.
+ * Look up capabilities for a model ID. Returns capabilities only for
+ * exactly registered model IDs. Unknown, custom, or unrecognized version
+ * IDs return undefined — no family-based inference per issue #30.
  */
 export function lookupCapabilities(modelId: string): ClaudeModelCapabilities | undefined {
-  const exact = BY_ID.get(modelId);
-  if (exact) return exact;
-  const family = familyOf(modelId);
-  if (!family) return undefined;
-  const familyModels = KNOWN_MODELS.filter(m => m.family === family);
-  return familyModels.length ? familyModels[familyModels.length - 1] : undefined;
+  return BY_ID.get(modelId);
 }
 
 /**
@@ -116,7 +112,7 @@ export function claudeEffortsFor(caps: ClaudeModelCapabilities | undefined): str
 }
 
 /** Override aliases for textual routing overrides ("use sonnet" etc.) */
-export const CLAUDE_OVERRIDE_ALIASES: Record<string, string> = {
+export const CLAUDE_OVERRIDE_ALIASES: Record<string, Tier> = {
   claude: "balanced",
   haiku: "fast",
   sonnet: "balanced",
@@ -130,6 +126,9 @@ export const CLAUDE_OVERRIDE_ALIASES: Record<string, string> = {
  * requested level (Claude native fallback). Returns undefined when the
  * model does not support adaptive effort.
  */
+const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+const effortRank = (e: string): number => { const i = EFFORT_ORDER.indexOf(e as typeof EFFORT_ORDER[number]); return i >= 0 ? i : -1; };
+
 export function normalizeClaudeEffort(
   requested: string | undefined,
   caps: ClaudeModelCapabilities | undefined,
@@ -137,23 +136,21 @@ export function normalizeClaudeEffort(
   if (!caps || caps.thinkingMode !== "adaptive" || !caps.supportedEfforts.length) return undefined;
   if (!requested || requested === "keep") return caps.defaultEffort;
 
-  const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-  const rank = (e: string) => { const i = EFFORT_ORDER.indexOf(e); return i >= 0 ? i : -1; };
-
-  const requestedRank = rank(requested);
+  const requestedRank = effortRank(requested);
   if (requestedRank < 0) return caps.defaultEffort;
 
   // Pick highest supported at or below requested
   let best: string | undefined;
   let bestRank = -1;
   for (const e of caps.supportedEfforts) {
-    const r = rank(e);
+    const r = effortRank(e);
     if (r >= 0 && r <= requestedRank && r > bestRank) {
       best = e;
       bestRank = r;
     }
   }
-  return best ?? caps.supportedEfforts[0];
+  // If no supported effort is at or below requested, use default (not first)
+  return best ?? caps.defaultEffort;
 }
 
 /**

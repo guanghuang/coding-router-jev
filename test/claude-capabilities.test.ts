@@ -38,10 +38,9 @@ describe("lookupCapabilities", () => {
     expect(opus!.defaultEffort).toBe("high");
   });
 
-  test("family fallback for unknown version within known family", () => {
+  test("unknown version within known family returns undefined (no family inference)", () => {
     const future = lookupCapabilities("claude-sonnet-9-9-20280101");
-    expect(future).toBeDefined();
-    expect(future!.family).toBe("sonnet");
+    expect(future).toBeUndefined();
   });
 
   test("unknown custom model returns undefined", () => {
@@ -107,10 +106,11 @@ describe("normalizeClaudeEffort", () => {
     expect(normalizeClaudeEffort("max", caps)).toBe("max");
   });
 
-  test("none/minimal fall back to lowest supported", () => {
-    const caps = lookupCapabilities("claude-sonnet-4-20250514")!; // supports low/medium/high
-    expect(normalizeClaudeEffort("none", caps)).toBe("low");
-    expect(normalizeClaudeEffort("minimal", caps)).toBe("low");
+  test("none/minimal below all supported fall back to default effort", () => {
+    const caps = lookupCapabilities("claude-sonnet-4-20250514")!; // supports low/medium/high, default=medium
+    // "none" and "minimal" rank below "low" (the lowest supported), so no match; uses default
+    expect(normalizeClaudeEffort("none", caps)).toBe("medium");
+    expect(normalizeClaudeEffort("minimal", caps)).toBe("medium");
   });
 });
 

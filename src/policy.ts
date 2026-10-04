@@ -1,11 +1,13 @@
 import { TIERS, type Candidate, type EligibilityResult, type Tier } from "./types";
 
-export function decide(prompt: string, choice: string | undefined, confidence: number | undefined, current: Tier, candidates: Candidate[], minConfidence: number) {
+export function decide(prompt: string, choice: string | undefined, confidence: number | undefined, current: Tier, candidates: Candidate[], minConfidence: number, extraAliases?: Record<string, Tier>) {
   const available = candidates.map(candidate => candidate.tier);
   const rank = (tier: Tier) => TIERS.indexOf(tier);
   const finish = (tier: Tier, reason: string) => ({ tier, reason: tier === current ? `${reason}/no-change` : reason });
-  const override = prompt.match(/^\s*(?:please\s+)?(?:use|switch to|with)\s+(fast|balanced|strong|long|luna|sol|astra)\b/i)?.[1].toLowerCase();
-  const aliases: Record<string, Tier> = { luna: "fast", sol: "strong", astra: "long" };
+  const aliasKeys = extraAliases ? Object.keys(extraAliases).join("|") : "";
+  const overridePattern = new RegExp(`^\\s*(?:please\\s+)?(?:use|switch to|with)\\s+(fast|balanced|strong|long|luna|sol|astra${aliasKeys ? "|" + aliasKeys : ""})\\b`, "i");
+  const override = prompt.match(overridePattern)?.[1].toLowerCase();
+  const aliases: Record<string, Tier> = { luna: "fast", sol: "strong", astra: "long", ...extraAliases };
   if (override) {
     const tier = aliases[override] ?? override as Tier;
     return finish(available.includes(tier) ? tier : current, available.includes(tier) ? "override" : "override+unavailable");

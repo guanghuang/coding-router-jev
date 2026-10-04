@@ -7,7 +7,7 @@ import { formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { TIERS, type Candidate, type RecentContext, type Tier } from "./types";
 import { textOfMessage, isToolResult, type ClaudeBody } from "./claude-types";
-import { lookupCapabilities, claudeEffortsFor, claudeCapacity, normalizeClaudeEffort, resolveClaudeThinking, safeVirtualContextBound, CLAUDE_OVERRIDE_ALIASES } from "./claude-capabilities";
+import { lookupCapabilities, claudeEffortsFor, claudeCapacity, resolveClaudeThinking, CLAUDE_OVERRIDE_ALIASES } from "./claude-capabilities";
 
 export const CLAUDE_SENTINEL = "coding-router-jev";
 
@@ -80,6 +80,7 @@ function claudeRecentContext(body: ClaudeBody): RecentContext | undefined {
 type ClaudeState = {
   tier: Tier;
   model: string;
+  lastEffort?: string;
   lastTurn?: string;
   notice?: string;
   noticeKey?: string;
@@ -126,12 +127,13 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
   const states = new Map<string, ClaudeState>();
   const locks = new Map<string, Promise<unknown>>();
+  const cachedCandidates = claudeCandidatesFor(config);
 
   async function prepare(body: ClaudeBody, signal?: AbortSignal) {
     const key = claudeConversationKey(body);
     const previous = locks.get(key) ?? Promise.resolve();
     const job = previous.catch(() => {}).then(async () => {
-      const candidates = claudeCandidatesFor(config);
+      const candidates = cachedCandidates;
       let state = states.get(key);
       if (!state) {
         const startCandidate = candidates.find(c => c.tier === config.startTier) ?? candidates.find(c => c.tier === "fast")!;
@@ -144,8 +146,12 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         const match = candidates.find(c => c.id === body.model);
         state.model = body.model;
         state.tier = match?.tier ?? state.tier;
+        // Explicit physical-model bypass: preserve client-supplied effort.
+        // Only strip incompatible fields for budgeted models; do not inject defaults.
         const caps = lookupCapabilities(body.model);
-        resolveClaudeThinking(undefined, caps, body as Record<string, unknown>);
+        if (caps?.thinkingMode === "budgeted") {
+          resolveClaudeThinking(undefined, caps, body as Record<string, unknown>);
+        }
         return { key, state, notice: undefined as string | undefined, noticeKey: undefined as string | undefined };
       }
 
@@ -157,9 +163,16 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
       // Eligibility: filter candidates that can fit this request
       const eligibility = checkEligibility(candidates, contextTokens, outputReserve);
-      const eligibleCandidates = eligibility.eligible.length > 0 ? eligibility.eligible
-        : eligibility.unknown.length > 0 ? [...eligibility.eligible, ...eligibility.unknown]
-        : candidates;
+      const eligibleCandidates = eligibility.eligible.length > 0
+        ? [...eligibility.eligible, ...eligibility.unknown]
+        : eligibility.unknown.length > 0
+          ? eligibility.unknown
+          : null;
+
+      if (!eligibleCandidates) {
+        const reasons = eligibility.rejected.map(r => `${r.candidate.id} (${r.candidate.tier}): ${r.reason}`).join("; ");
+        throw new Error(`No Claude model can fit this request. Estimated ${contextTokens} context tokens + ${outputReserve} output reserve. Rejected: ${reasons}. Compact the conversation or configure a larger model.`);
+      }
 
       const turn = claudeNewTurn(body);
       const turnKey = turn?.anchor;
@@ -177,7 +190,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           prompt: turn.prompt,
           currentTier,
           currentModel,
-          currentEffort: undefined,
+          currentEffort: state.lastEffort,
           contextTokens,
           candidates: eligibleCandidates,
           ...(config.sendRecentContext ? { recentContext: claudeRecentContext(body) } : {}),
@@ -192,7 +205,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
         const modelAnswer = result.response?.answers?.model;
         const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence) && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1 ? modelAnswer.confidence : null;
-        const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, eligibleCandidates, config.minConfidence);
+        const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, eligibleCandidates, config.minConfidence, CLAUDE_OVERRIDE_ALIASES);
         const selected = eligibleCandidates.find(c => c.tier === decision.tier) ?? eligibleCandidates[0] ?? candidates[0];
 
         // Effort normalization for Claude models
@@ -203,6 +216,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
         state.model = selected.id;
         state.tier = decision.tier;
+        state.lastEffort = effectiveEffort;
         state.lastTurn = turnKey;
 
         const id = randomUUID();
@@ -269,7 +283,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: "model: field is required and must be a non-empty string" } }, { status: 400 });
         }
 
-        if (body.model === CLAUDE_SENTINEL && !claudeCandidatesFor(config).length) {
+        if (body.model === CLAUDE_SENTINEL && !cachedCandidates.length) {
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: "No Claude model candidates configured" } }, { status: 400 });
         }
 

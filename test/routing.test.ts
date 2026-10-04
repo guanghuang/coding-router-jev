@@ -251,3 +251,21 @@ test("eligibility: contextWindow 0 is classified as unknown", () => {
   expect(result.eligible).toHaveLength(0);
   expect(result.rejected).toHaveLength(0);
 });
+
+test("decide accepts extra aliases for agent-specific override keywords", () => {
+  const claudeCandidates: Candidate[] = [
+    { tier: "fast", id: "claude-haiku-4-5-20251001", description: "Haiku", efforts: [] },
+    { tier: "balanced", id: "claude-sonnet-5-5", description: "Sonnet", efforts: ["medium"] },
+    { tier: "strong", id: "claude-opus-5-5", description: "Opus", efforts: ["high"] },
+  ];
+  const aliases: Record<string, "fast" | "balanced" | "strong" | "long"> = {
+    haiku: "fast", sonnet: "balanced", opus: "strong", fable: "long", claude: "balanced",
+  };
+  expect(decide("use sonnet", undefined, undefined, "fast", claudeCandidates, 0.3, aliases).tier).toBe("balanced");
+  expect(decide("use haiku", undefined, undefined, "strong", claudeCandidates, 0.3, aliases).tier).toBe("fast");
+  expect(decide("use opus", undefined, undefined, "fast", claudeCandidates, 0.3, aliases).tier).toBe("strong");
+  expect(decide("use fable", undefined, undefined, "fast", claudeCandidates, 0.3, aliases).tier).toBe("fast");
+  expect(decide("use fable", undefined, undefined, "fast", claudeCandidates, 0.3, aliases).reason).toContain("unavailable");
+  // Built-in aliases still work
+  expect(decide("use Luna", undefined, undefined, "strong", claudeCandidates, 0.3, aliases).tier).toBe("fast");
+});
