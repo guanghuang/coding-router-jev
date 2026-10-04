@@ -7,11 +7,12 @@
   "type": "module",
   "bin": {
     "codex-jev": "src/cli.ts",
+    "claude-jev": "src/claude-cli.ts",
     "jev-logs": "src/jev-logs.ts"
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
-    "build": "bun build src/cli.ts --compile --outfile dist/codex-jev && bun build src/jev-logs.ts --compile --outfile dist/jev-logs",
+    "build": "bun build src/cli.ts --compile --outfile dist/codex-jev && bun build src/claude-cli.ts --compile --outfile dist/claude-jev && bun build src/jev-logs.ts --compile --outfile dist/jev-logs",
     "check": "tsc --noEmit",
     "test": "bun test"
   },

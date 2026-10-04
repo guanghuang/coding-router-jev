@@ -19,6 +19,12 @@ describe("configuration", () => {
         strong: "openai-codex/gpt-6.1-sol",
         long: "openai-codex/gpt-6-astra",
       },
+      claudeModels: {
+        fast: "claude-sonnet-4-20250514",
+        balanced: "claude-sonnet-4-20250514",
+        strong: "claude-sonnet-4-20250514",
+        long: "claude-sonnet-4-20250514",
+      },
       startTier: "fast",
       longModelEnabled: false,
       minConfidence: 0.3,

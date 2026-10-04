@@ -29,12 +29,12 @@ export type RoutingInput = {
   candidates: Candidate[];
   recentContext?: RecentContext;
   cache?: Record<string, JsonValue>;
-  agent?: "codex" | "pi";
+  agent?: "codex" | "pi" | "claude";
   callerOptions?: CallerOptions;
 };
 export function buildRequest(input: RoutingInput): SystemOneRequest {
   const efforts = [...new Set(input.candidates.flatMap(candidate => candidate.efforts))];
-  const agentName = input.agent === "pi" ? "Pi" : "Codex";
+  const agentName = input.agent === "pi" ? "Pi" : input.agent === "claude" ? "Claude" : "Codex";
   return {
     state: {
       request: input.prompt,
