@@ -1,5 +1,6 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { Config } from "./config";
+import { hash } from "./context";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult } from "./router";
 import { formatFeedback, type FeedbackValues } from "./feedback";
@@ -34,8 +35,6 @@ function summarizeClaudeCacheRun(observations: ClaudeUsageObs[], currentModel: s
   }
   return result;
 }
-
-const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 24);
 
 function claudeConversationKey(body: ClaudeBody): string {
   const metadata = body.metadata as Record<string, unknown> | undefined;
@@ -104,9 +103,10 @@ export function claudeCandidatesFor(config: Config): Candidate[] {
 const BEDROCK_RE = /\.amazonaws\.com/i;
 const VERTEX_RE = /aiplatform\.googleapis\.com/i;
 
-export function claudeArgs(baseURL: string, args: string[]): string[] {
+export function claudeArgs(args: string[], env?: Record<string, string | undefined>): string[] {
   const hasModel = args.some(arg => ["--model", "-m"].includes(arg) || arg.startsWith("--model=") || /^-m.+/.test(arg));
-  return [...(hasModel ? [] : ["--model", CLAUDE_SENTINEL]), ...args];
+  const hasEnvModel = !!(env ?? process.env).ANTHROPIC_MODEL?.trim();
+  return [...(hasModel || hasEnvModel ? [] : ["--model", CLAUDE_SENTINEL]), ...args];
 }
 
 export function startClaudeProxy(config: Config, options: { route?: Route; upstreamBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void } = {}) {
@@ -123,7 +123,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
   const states = new Map<string, ClaudeState>();
   const locks = new Map<string, Promise<unknown>>();
 
-  async function prepare(body: ClaudeBody) {
+  async function prepare(body: ClaudeBody, signal?: AbortSignal) {
     const key = claudeConversationKey(body);
     const previous = locks.get(key) ?? Promise.resolve();
     const job = previous.catch(() => {}).then(async () => {
@@ -165,6 +165,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           ...(config.sendRecentContext ? { recentContext: claudeRecentContext(body) } : {}),
           cache,
           agent: "claude" as const,
+          callerOptions: signal ? { signal } : undefined,
         };
 
         let result: RoutingResult;
@@ -248,7 +249,11 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: "No Claude model candidates configured" } }, { status: 400 });
         }
 
-        const prepared = await prepare(body);
+        let prepared: Awaited<ReturnType<typeof prepare>>;
+        try { prepared = await prepare(body, request.signal); }
+        catch (prepError) {
+          return Response.json({ type: "error", error: { type: "invalid_request_error", message: prepError instanceof Error ? prepError.message : "Invalid request" } }, { status: 400 });
+        }
 
         const headers = new Headers(request.headers);
         for (const name of ["host", "content-length", "transfer-encoding", "connection", "accept-encoding"]) headers.delete(name);

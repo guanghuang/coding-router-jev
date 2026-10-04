@@ -14,7 +14,7 @@ try {
 
   if (hasKey) {
     proxy = startClaudeProxy(configFromEnv());
-    childArgs = claudeArgs(`http://127.0.0.1:${proxy.port}`, args);
+    childArgs = claudeArgs(args, process.env);
     logPath = proxy.logPath;
   } else {
     console.error("[Jev] TYPESAFE_API_KEY is not set; starting Claude without routing.");

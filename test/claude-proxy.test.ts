@@ -327,14 +327,17 @@ test("Vertex transport is detected and rejected", () => {
 });
 
 test("claudeArgs builds correct arguments as string array", () => {
-  const built = claudeArgs("http://127.0.0.1:3000", ["--print", "hello"]);
+  const built = claudeArgs(["--print", "hello"], {});
   expect(built).toContain("--model");
   expect(built).toContain(CLAUDE_SENTINEL);
   expect(built).toContain("--print");
 
-  const withModel = claudeArgs("http://127.0.0.1:3000", ["--model", "claude-opus-4-20250514"]);
+  const withModel = claudeArgs(["--model", "claude-opus-4-20250514"], {});
   expect(withModel.filter(a => a === CLAUDE_SENTINEL)).toHaveLength(0);
   expect(withModel).toContain("claude-opus-4-20250514");
+
+  const withEnv = claudeArgs(["--print", "hi"], { ANTHROPIC_MODEL: "claude-opus-4-20250514" });
+  expect(withEnv.filter(a => a === CLAUDE_SENTINEL)).toHaveLength(0);
 });
 
 test("claudeCandidatesFor uses config claudeModels", () => {
