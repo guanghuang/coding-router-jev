@@ -1,7 +1,6 @@
-import { loadEnv, configFromEnv, type Config } from "./config";
-import { createRouter, type CallerOptions, type Route, type RoutingResult } from "./router";
+import { configFromEnv, type Config } from "./config";
+import { createRouter, buildRequest, type CallerOptions, type Route, type RoutingResult } from "./router";
 import { decide, decisionLabel, checkEligibility } from "./policy";
-import { buildRequest } from "./router";
 import { TIERS, type Candidate, type Tier, type ContextEvidence } from "./types";
 
 const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -121,7 +120,7 @@ export function resolveEffort(
     return clamp.clampThinkingLevel(config, jevEffort as PiThinkingLevel);
   }
 
-  if (priorLevel && priorLevel !== "keep" as string && supported.includes(priorLevel)) {
+  if (priorLevel && supported.includes(priorLevel)) {
     return clamp.clampThinkingLevel(config, priorLevel);
   }
 
@@ -139,7 +138,7 @@ export function estimateContextTokens(request: PiRequest): ContextEvidence {
   return { tokens, source: "estimated", accuracy: "character-based heuristic, not a tokenizer measurement" };
 }
 
-export type CreateAdapterOptions = {
+type CreateAdapterOptions = {
   config?: Config;
   route?: Route;
   registry: PiModelRegistry;
@@ -153,21 +152,18 @@ export function createPiAdapter(options: CreateAdapterOptions) {
   const { registry, clamp, onResult } = options;
 
   let state: AdapterState | undefined;
+  let pending: Promise<AdapterResult> | undefined;
 
   function getStartupState(): AdapterState {
-    const { candidates } = piCandidatesFor(config, registry);
+    const { candidates, errors } = piCandidatesFor(config, registry);
     const startTier = config.startTier;
     const startCandidate = candidates.find(c => c.tier === startTier) ?? candidates.find(c => c.tier === "fast");
     if (!startCandidate) {
-      throw new Error("No valid Pi models configured. Check CODING_ROUTER_*_MODEL_PI environment variables.");
+      throw new Error(`No valid Pi models configured: ${errors.join("; ")}. Check CODING_ROUTER_*_MODEL_PI environment variables.`);
     }
     const { provider, modelId } = splitPiModelId(startCandidate.id);
     const effort = resolveEffort(undefined, startCandidate, undefined, clamp, { provider, modelId });
     return { tier: startCandidate.tier, provider, modelId, effectiveEffort: effort, version: 1 };
-  }
-
-  function physicalPair(s: AdapterState): { provider: string; modelId: string; thinkingLevel: PiThinkingLevel } {
-    return { provider: s.provider, modelId: s.modelId, thinkingLevel: s.effectiveEffort };
   }
 
   async function resolveModel(request: PiRequest): Promise<AdapterResult> {
@@ -180,7 +176,25 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     if (request.reason === "direct") {
       return handleDirect(request);
     }
-    return handleUser(request);
+    const prior = pending ?? Promise.resolve();
+    const job = prior.catch(() => {}).then(() => handleUser(request));
+    pending = job;
+    try { return await job; } finally { if (pending === job) pending = undefined; }
+  }
+
+  function normalizePreviousLevel(
+    prev: { provider: string; modelId: string; thinkingLevel?: string },
+    piClamp: PiClamp,
+  ): PiThinkingLevel {
+    const supported = piClamp.getSupportedThinkingLevels({ provider: prev.provider, modelId: prev.modelId });
+    if (prev.thinkingLevel && supported.includes(prev.thinkingLevel as PiThinkingLevel)) {
+      return piClamp.clampThinkingLevel({ provider: prev.provider, modelId: prev.modelId }, prev.thinkingLevel as PiThinkingLevel);
+    }
+    if (supported.length === 0 || (supported.length === 1 && supported[0] === "off")) return "off";
+    return piClamp.clampThinkingLevel(
+      { provider: prev.provider, modelId: prev.modelId },
+      supported.includes("medium") ? "medium" : supported[0],
+    );
   }
 
   function handleContinuation(request: PiRequest): AdapterResult {
@@ -235,7 +249,8 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     }
 
     const contextEvidence = estimateContextTokens(request);
-    const contextTokens = request.contextTokens ?? contextEvidence.tokens;
+    const contextTokens = Number.isFinite(request.contextTokens) && request.contextTokens! >= 0
+      ? request.contextTokens! : contextEvidence.tokens;
 
     const eligibility = checkEligibility(candidates, contextTokens, 16_000);
     const eligibleCandidates = [...eligibility.eligible, ...eligibility.unknown];
@@ -265,10 +280,12 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     try {
       result = await route(routingInput);
     } catch (error) {
+      const callerAborted = request.signal?.aborted === true;
       result = {
         request: buildRequest(routingInput),
         response: null,
-        error: error instanceof Error ? error.message : "JEV routing failed",
+        error: callerAborted ? "Routing cancelled by caller" : (error instanceof Error ? error.message : "JEV routing failed"),
+        ...(callerAborted ? { aborted: true } : {}),
         ms: 0,
       };
     }
@@ -277,7 +294,11 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false);
     }
 
-    const modelAnswer = result.response?.answers?.model;
+    if (!result.response) {
+      return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, "JEV/unavailable", null);
+    }
+
+    const modelAnswer = result.response.answers?.model;
     const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence)
       && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1
       ? modelAnswer.confidence : null;
@@ -294,7 +315,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     const selected = eligibleCandidates.find(c => c.tier === decision.tier) ?? eligibleCandidates[0];
     const { provider: selProvider, modelId: selModelId } = splitPiModelId(selected.id);
 
-    const effortAnswer = result.response?.answers?.reasoning_effort;
+    const effortAnswer = result.response.answers?.reasoning_effort;
     const desiredEffort = effortAnswer?.type === "choice"
       && Number.isFinite(effortAnswer.confidence)
       && effortAnswer.confidence >= config.minConfidence
@@ -319,21 +340,6 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     };
 
     return buildResult(selProvider, selModelId, effort, decision.tier, true, decisionLabel(decision.reason), confidence);
-  }
-
-  function normalizePreviousLevel(
-    prev: { provider: string; modelId: string; thinkingLevel?: string },
-    piClamp: PiClamp,
-  ): PiThinkingLevel {
-    const supported = piClamp.getSupportedThinkingLevels({ provider: prev.provider, modelId: prev.modelId });
-    if (prev.thinkingLevel && supported.includes(prev.thinkingLevel as PiThinkingLevel)) {
-      return piClamp.clampThinkingLevel({ provider: prev.provider, modelId: prev.modelId }, prev.thinkingLevel as PiThinkingLevel);
-    }
-    if (supported.length === 0 || (supported.length === 1 && supported[0] === "off")) return "off";
-    return piClamp.clampThinkingLevel(
-      { provider: prev.provider, modelId: prev.modelId },
-      supported.includes("medium") ? "medium" : supported[0],
-    );
   }
 
   function buildResult(
@@ -362,14 +368,22 @@ export function createPiAdapter(options: CreateAdapterOptions) {
   return { resolveModel, get state() { return state; } };
 }
 
+const MIN_PI_MAJOR = 1;
+const MIN_PI_MINOR = 0;
+const MIN_PI_PATCH = 2;
+
 export function activate(pi: {
   registerVirtualModel: (opts: { provider: string; id: string; name: string }) => { onResolve: (fn: (req: PiRequest) => Promise<AdapterResult>) => void };
   version?: string;
   modelRegistry: PiModelRegistry;
-}, piAi: PiClamp, options?: { config?: Config; route?: Route; onResult?: (result: AdapterResult) => void }) {
+}, clamp: PiClamp, options?: { config?: Config; route?: Route; onResult?: (result: AdapterResult) => void }) {
   if (pi.version) {
-    const [major, minor] = pi.version.split(".").map(Number);
-    if (major < 1 || (major === 1 && minor < 0)) {
+    const parts = pi.version.split(".").map(Number);
+    const [major, minor, patch] = parts;
+    if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch ?? 0)
+      || major < MIN_PI_MAJOR
+      || (major === MIN_PI_MAJOR && minor < MIN_PI_MINOR)
+      || (major === MIN_PI_MAJOR && minor === MIN_PI_MINOR && (patch ?? 0) < MIN_PI_PATCH)) {
       throw new Error(
         `Pi ${pi.version} does not support virtual models. Upgrade to @earendil-works/pi-coding-agent >=1.0.2.`,
       );
@@ -380,7 +394,7 @@ export function activate(pi: {
     config: options?.config,
     route: options?.route,
     registry: pi.modelRegistry,
-    clamp: piAi,
+    clamp,
     onResult: options?.onResult,
   });
 
