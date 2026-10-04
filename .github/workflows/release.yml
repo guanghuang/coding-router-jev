@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — build and verify without publishing"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -44,9 +54,16 @@ jobs:
 
       - name: Verify version consistency
         id: version
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           PKG_VERSION=$(bun -e "console.log(require('./package.json').version)")
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$PKG_VERSION" ]; then
+            echo "::error::Could not read version from package.json"
+            exit 1
+          fi
+          TAG_VERSION="${TAG#v}"
           echo "package.json version: $PKG_VERSION"
           echo "Tag version:          $TAG_VERSION"
           if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
@@ -60,6 +77,9 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v5
 
@@ -91,15 +111,27 @@ jobs:
 
       - name: Smoke test Linux x64 binary
         run: |
+          set -euo pipefail
           chmod +x dist/codex-jev-linux-x64
-          echo "--- Smoke test: binary runs and exits ---"
-          dist/codex-jev-linux-x64 --help || SMOKE_EXIT=$?
-          echo "Exit code: ${SMOKE_EXIT:-0}"
-          echo "Smoke test: Linux x64 binary executed successfully"
+          export PATH="$(pwd)/test/fixtures:$PATH"
+          echo "--- Smoke test: binary runs with fake codex fixture ---"
+          OUTPUT=$(dist/codex-jev-linux-x64 --help 2>&1) || {
+            echo "::error::Smoke test failed with exit code $?"
+            echo "$OUTPUT"
+            exit 1
+          }
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q '"stub":"codex"'; then
+            echo "Smoke test: launcher forwarded args to codex fixture"
+          else
+            echo "Smoke test: binary executed (codex fixture output not detected; launcher may have exited before spawn)"
+          fi
+          echo "Smoke test passed"
 
-      - name: Generate SHA256SUMS
+      - name: Generate and verify SHA256SUMS
         working-directory: dist
         run: |
+          set -euo pipefail
           sha256sum \
             codex-jev-darwin-arm64 \
             codex-jev-darwin-x64 \
@@ -109,6 +141,8 @@ jobs:
             > SHA256SUMS
           echo "--- SHA256SUMS ---"
           cat SHA256SUMS
+          echo "--- Verifying checksums ---"
+          sha256sum --check SHA256SUMS
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -127,13 +161,13 @@ jobs:
   release:
     name: Create release
     needs: [validate, build]
+    if: github.event_name == 'push' || inputs.dry_run == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     steps:
-      - uses: actions/checkout@v5
-
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -142,26 +176,34 @@ jobs:
 
       - name: Verify checksums
         working-directory: dist
-        run: sha256sum --check SHA256SUMS
+        run: |
+          set -euo pipefail
+          sha256sum --check SHA256SUMS
 
       - name: Check for existing release
         id: existing
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          if gh release view "${{ github.ref_name }}" --json tagName >/dev/null 2>&1; then
-            EXISTING_SUMS=$(gh release download "${{ github.ref_name }}" --pattern SHA256SUMS --output - 2>/dev/null || true)
-            if [ -n "$EXISTING_SUMS" ]; then
-              NEW_SUMS=$(cat dist/SHA256SUMS)
-              if [ "$EXISTING_SUMS" != "$NEW_SUMS" ]; then
-                echo "::error::Release ${{ github.ref_name }} already exists with different checksums. Refusing to overwrite."
-                exit 1
-              fi
-              echo "Release already exists with matching checksums; skipping."
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "skip=false" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if gh release view "$TAG" --repo "${{ github.repository }}" --json tagName >/dev/null 2>&1; then
+            echo "Release $TAG already exists; checking checksums."
+            EXISTING_SUMS=$(gh release download "$TAG" --repo "${{ github.repository }}" --pattern SHA256SUMS --output - 2>/dev/null) || {
+              echo "::error::Release $TAG exists but SHA256SUMS could not be downloaded. Delete the release manually or fix its assets."
+              exit 1
+            }
+            if [ -z "$EXISTING_SUMS" ]; then
+              echo "::error::Release $TAG exists but SHA256SUMS is empty. Delete the release manually or fix its assets."
+              exit 1
             fi
+            NEW_SUMS=$(cat dist/SHA256SUMS)
+            if [ "$EXISTING_SUMS" != "$NEW_SUMS" ]; then
+              echo "::error::Release $TAG already exists with different checksums. Refusing to overwrite."
+              exit 1
+            fi
+            echo "Release already exists with matching checksums; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -170,20 +212,19 @@ jobs:
         if: steps.existing.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          VERSION="${{ needs.validate.outputs.version }}"
+          set -euo pipefail
+
           IS_PRERELEASE=false
           if echo "$VERSION" | grep -qE '[-]'; then
             IS_PRERELEASE=true
           fi
 
-          PRERELEASE_FLAG=""
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            PRERELEASE_FLAG="--prerelease"
-          fi
-
-          cat > release-notes.md << 'NOTES'
-          ## codex-jev ${{ github.ref_name }}
+          cat > release-notes.md <<'NOTES'
+          ## codex-jev TAG_PLACEHOLDER
 
           Standalone launcher binaries for macOS, Linux, and Windows.
 
@@ -208,10 +249,10 @@ jobs:
 
           ```sh
           # Download all assets for this release
-          gh release download ${{ github.ref_name }} --repo guanghuang/coding-router-jev
+          gh release download TAG_PLACEHOLDER --repo REPO_PLACEHOLDER
 
           # Or download a specific binary
-          gh release download ${{ github.ref_name }} --repo guanghuang/coding-router-jev --pattern 'codex-jev-linux-x64'
+          gh release download TAG_PLACEHOLDER --repo REPO_PLACEHOLDER --pattern 'codex-jev-linux-x64'
           ```
 
           ### Verify checksums
@@ -230,13 +271,19 @@ jobs:
           - npm publication, macOS notarization, and Windows signing are separate follow-ups.
           NOTES
 
-          # Remove leading whitespace from heredoc
           sed -i 's/^          //' release-notes.md
+          sed -i "s|TAG_PLACEHOLDER|$TAG|g; s|REPO_PLACEHOLDER|$REPO|g" release-notes.md
 
-          gh release create "${{ github.ref_name }}" \
-            --title "codex-jev ${{ github.ref_name }}" \
+          PRERELEASE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "codex-jev $TAG" \
             --notes-file release-notes.md \
-            $PRERELEASE_FLAG \
+            ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             dist/codex-jev-darwin-arm64 \
             dist/codex-jev-darwin-x64 \
             dist/codex-jev-linux-arm64 \

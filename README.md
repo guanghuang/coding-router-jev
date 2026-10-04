@@ -4,7 +4,7 @@ A TypeScript/Bun wrapper that routes Codex user turns through JEV. The command i
 
 ## Prerequisites
 
-Both installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
+All installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
 
 ## Install from release (recommended)
 
@@ -17,11 +17,11 @@ chmod +x codex-jev-linux-x64
 mv codex-jev-linux-x64 ~/.local/bin/codex-jev
 ```
 
-Verify the download checksum:
+Verify the download checksum (both the binary and `SHA256SUMS` must be in the same directory):
 
 ```sh
 gh release download --repo guanghuang/coding-router-jev --pattern 'SHA256SUMS'
-sha256sum --check SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
 ```
 
 ### Platform support
@@ -83,7 +83,7 @@ bun run src/cli.ts exec "explain this repository"
 
 ## Compiled launcher (Bun not required at runtime)
 
-Build a standalone local launcher that does not require Bun at runtime:
+For prebuilt binaries, see [Install from release](#install-from-release-recommended). To build locally:
 
 ```sh
 bun run build
@@ -216,6 +216,17 @@ bun run check
 bun test
 bun run build
 ```
+
+### Releasing
+
+Bump `version` in `package.json`, then push a matching tag:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The `.github/workflows/release.yml` workflow validates, cross-compiles, and publishes release assets. The tag version must match `package.json`. Use `workflow_dispatch` with `dry_run=true` to test the build without publishing.
 
 Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
 

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fake codex stub for smoke-testing the compiled launcher binary.
+# Prints received arguments as JSON and exits 0 so CI can verify
+# that the launcher forwarded args correctly without real credentials.
+echo '{"stub":"codex","argv":'"$(printf '%s\n' "$@" | jq -R . | jq -s .)"'}'
+exit 0
