@@ -192,6 +192,8 @@ describe("install.ps1", () => {
     const exitCode = await proc.exited;
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Install or upgrade codex-jev");
+    expect(stdout).toContain("claude-jev");
+    expect(stdout).toContain("jev-logs");
     expect(stdout).toContain("-Version");
     expect(stdout).toContain("-Dir");
     expect(stdout).toContain("Uninstall");
@@ -281,6 +283,51 @@ describe("install.ps1", () => {
       const combined = stdout + stderr;
       expect(exitCode).toBe(0);
       expect(combined).toContain("Installed codex-jev to");
+    });
+
+    test("installs claude-jev and jev-logs alongside codex-jev", async () => {
+      if (!pwshAvailable) return;
+      const server = startFixtureServer(FIXTURES);
+      const installDir = join(tempDir, "install-all-binaries");
+
+      const { stdout, stderr, exitCode } = await runInstallerWithServer(
+        server,
+        installDir,
+        { version: "v0.1.0" },
+      );
+      server.stop();
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      expect(combined).toContain("Installed codex-jev to");
+      expect(combined).toContain("Installed claude-jev to");
+      expect(combined).toContain("Installed jev-logs to");
+
+      const codexInfo = await stat(join(installDir, "codex-jev.exe"));
+      expect(codexInfo.size).toBeGreaterThan(0);
+      const claudeInfo = await stat(join(installDir, "claude-jev.exe"));
+      expect(claudeInfo.size).toBeGreaterThan(0);
+      const jevLogsInfo = await stat(join(installDir, "jev-logs.exe"));
+      expect(jevLogsInfo.size).toBeGreaterThan(0);
+    });
+
+    test("verifies checksums for all three binaries", async () => {
+      if (!pwshAvailable) return;
+      const server = startFixtureServer(FIXTURES);
+      const installDir = join(tempDir, "install-checksums-all");
+
+      const { stdout, stderr, exitCode } = await runInstallerWithServer(
+        server,
+        installDir,
+        { version: "v0.1.0" },
+      );
+      server.stop();
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      const checksumMatches = combined.match(/Checksum verified:/g);
+      expect(checksumMatches).not.toBeNull();
+      expect(checksumMatches!.length).toBe(3);
     });
   });
 

@@ -132,16 +132,22 @@ jobs:
           echo "--- Smoke test: claude-jev binary starts without TYPESAFE_API_KEY ---"
           OUTPUT=$(dist/claude-jev-linux-x64 --help 2>&1) || true
           echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -qi 'TYPESAFE_API_KEY\|claude\|not found\|not set'; then
+          if echo "$OUTPUT" | grep -qi 'TYPESAFE_API_KEY is not set\|Claude Code CLI not found'; then
             echo "claude-jev smoke test PASSED: binary runs and reports expected state"
           else
-            echo "::warning::claude-jev smoke test: unexpected output (non-fatal)"
+            echo "::error::claude-jev smoke test FAILED: expected routing-disabled or CLI-not-found message"
+            exit 1
           fi
 
           echo "--- Smoke test: jev-logs binary runs ---"
           OUTPUT=$(dist/jev-logs-linux-x64 /dev/null --last 1 2>&1) || true
           echo "$OUTPUT"
-          echo "jev-logs smoke test PASSED: binary executes"
+          if echo "$OUTPUT" | grep -qi 'No active session log\|session log is empty\|no valid\|routing decisions'; then
+            echo "jev-logs smoke test PASSED: binary runs and reports expected state"
+          else
+            echo "::error::jev-logs smoke test FAILED: expected empty/no-log message"
+            exit 1
+          fi
 
       - name: Generate and verify SHA256SUMS
         working-directory: dist
@@ -265,7 +271,7 @@ jobs:
           fi
 
           cat > release-notes.md <<'NOTES'
-          ## codex-jev TAG_PLACEHOLDER
+          ## codex-jev / claude-jev TAG_PLACEHOLDER
 
           Standalone launcher binaries for macOS, Linux, and Windows.
 

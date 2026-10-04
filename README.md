@@ -551,7 +551,7 @@ The shared routing configuration includes model mappings for Pi extensions. Pi u
 | `CODING_ROUTER_STRONG_MODEL_PI` | `openai-codex/gpt-6.1-sol` |
 | `CODING_ROUTER_LONG_MODEL_PI` | `openai-codex/gpt-6-astra` |
 
-Shared settings — confidence threshold, recent context, feedback format, log retention, Long model enable — apply to both Codex and Pi. The Pi adapter consumes these mappings through `configFromEnv()` and resolves physical models from Pi's model registry at runtime.
+Shared settings — confidence threshold, recent context, feedback format, log retention, Long model enable — apply to Codex, Claude, and Pi. Each adapter consumes these mappings through `configFromEnv()`. Claude model aliases (`_MODEL_CLAUDE`) are documented in [Claude model configuration](#claude-model-configuration).
 
 #### Thinking-level normalization
 
@@ -773,6 +773,14 @@ The Codex CLI (`codex`) must be installed and authenticated separately. `codex-j
 ### "Do I need Bun?"
 
 **No**, if you use a prebuilt binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases) or an installer (`install.sh` / `install.ps1`). Bun is only required for [source installation](#install-from-source-bun-required) or local development.
+
+### "claude-jev: Claude Code CLI not found"
+
+The Claude Code CLI (`claude`) must be installed and authenticated separately. `claude-jev` is a routing wrapper, not a replacement for Claude Code. Install Claude Code from [code.claude.com](https://code.claude.com) or via `npm install -g @anthropic-ai/claude-code`, authenticate, and confirm `claude --help` works before using `claude-jev`.
+
+### "claude-jev: TYPESAFE_API_KEY is not set"
+
+Without `TYPESAFE_API_KEY`, `claude-jev` starts ordinary Claude Code without JEV routing. Set the key in `~/.coding-router-jev.env` or your shell environment to enable routing.
 
 ### PATH collisions — wrong `codex-jev` is found
 

@@ -278,8 +278,8 @@ install_binary() {
     log "Replacing existing installation at ${_dest}"
   fi
 
-  chmod +x "$_src" || die "cannot set executable permission on downloaded binary"
-  mv "$_src" "$_dest" || die "failed to install binary to ${_dest}"
+  chmod +x "$_src" || die "cannot set executable permission on ${_name}"
+  mv "$_src" "$_dest" || die "failed to install ${_name} to ${_dest}"
 
   log "Installed ${_name} to ${_dest}"
 }
