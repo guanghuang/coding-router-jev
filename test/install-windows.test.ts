@@ -158,13 +158,14 @@ describe("install.ps1", () => {
 
   test("script has valid PowerShell syntax", async () => {
     if (!pwshAvailable) return;
+    const escapedPath = INSTALL_SCRIPT.replace(/\\/g, "\\\\");
     const proc = Bun.spawn(
       [
         "pwsh",
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `$null = [System.Management.Automation.Language.Parser]::ParseFile('${INSTALL_SCRIPT}', [ref]$null, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }`,
+        `$errs = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile("${escapedPath}", [ref]$null, [ref]$errs); if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }`,
       ],
       { stdout: "pipe", stderr: "pipe" },
     );

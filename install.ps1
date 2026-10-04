@@ -101,18 +101,15 @@ Rollback:
 # ── Architecture detection ───────────────────────────────────────────────────
 
 function Test-Architecture {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-    switch ($arch) {
-        'X64' {
-            Write-Log "Detected architecture: x64"
-            return
-        }
-        'Arm64' {
-            Exit-WithError "Windows ARM64 is not supported. Only Windows x64 is supported."
-        }
-        default {
-            Exit-WithError "unsupported architecture: $arch. Only Windows x64 is supported."
-        }
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    if ($arch -ieq 'X64') {
+        Write-Log "Detected architecture: x64"
+    }
+    elseif ($arch -ieq 'Arm64') {
+        Exit-WithError "Windows ARM64 is not supported. Only Windows x64 is supported."
+    }
+    else {
+        Exit-WithError "unsupported architecture: $arch. Only Windows x64 is supported."
     }
 }
 
