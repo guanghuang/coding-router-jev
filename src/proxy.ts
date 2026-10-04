@@ -12,7 +12,8 @@ import { TIERS, type Candidate, type CodexBody, type Tier } from "./types";
 export const AUTO_MODEL = "coding-router-jev";
 type CatalogModel = { slug: string; display_name?: string; description?: string; context_window?: number; default_reasoning_level?: string; supported_reasoning_levels?: { effort: string }[]; [key: string]: unknown };
 type ResponseObservation = { model: string; read: number | null; created: number | null; at: number };
-export function summarizeCacheRun(observations: ResponseObservation[], currentModel: string, now: number): { window: string; observed_responses: number; newest_seconds_ago?: number; oldest_seconds_ago?: number; cache_read_tokens_avg: number | null; cache_created_tokens_avg: number | null } {
+type CacheRunSummary = { window: string; observed_responses: number; newest_seconds_ago?: number; oldest_seconds_ago?: number; cache_read_tokens_avg: number | null; cache_created_tokens_avg: number | null };
+export function summarizeCacheRun(observations: ResponseObservation[], currentModel: string, now: number): CacheRunSummary {
   const matched: ResponseObservation[] = [];
   const sorted = [...observations].sort((a, b) => b.at - a.at);
   for (const obs of sorted) {
@@ -22,7 +23,7 @@ export function summarizeCacheRun(observations: ResponseObservation[], currentMo
   }
   const readValues = matched.map(o => o.read).filter((v): v is number => v !== null);
   const createdValues = matched.map(o => o.created).filter((v): v is number => v !== null);
-  const result: { window: string; observed_responses: number; newest_seconds_ago?: number; oldest_seconds_ago?: number; cache_read_tokens_avg: number | null; cache_created_tokens_avg: number | null } = {
+  const result: CacheRunSummary = {
     window: "up to 1 hour, stopping at the most recent model switch",
     observed_responses: matched.length,
     cache_read_tokens_avg: readValues.length ? readValues.reduce((s, v) => s + v, 0) / readValues.length : null,

@@ -31,7 +31,12 @@ function makeRecord(overrides: Partial<LogRecord> = {}): LogRecord {
     previous: { tier: "balanced", model: "gpt-6.1-sol", effort: "medium" },
     decision: { tier: "strong", reason: "jev", model: "gpt-6.1-sol", effort: "high" },
     cache: {
-      last_turn: { cache_read_tokens: 1024, cache_created_tokens: 512 },
+      window: "up to 1 hour, stopping at the most recent model switch",
+      observed_responses: 3,
+      newest_seconds_ago: 60,
+      oldest_seconds_ago: 900,
+      cache_read_tokens_avg: 1024,
+      cache_created_tokens_avg: 512,
     },
     ...overrides,
   };
@@ -148,8 +153,16 @@ describe("formatSummary", () => {
   test("shows cache info when available", () => {
     const summary = formatSummary(makeRecord());
     expect(summary).toContain("Cache:");
-    expect(summary).toContain("1024 read");
-    expect(summary).toContain("512 write");
+    expect(summary).toContain("3 observations");
+    expect(summary).toContain("1024 avg read");
+    expect(summary).toContain("512 avg write");
+  });
+
+  test("shows legacy cache info when last_turn is present", () => {
+    const summary = formatSummary(makeRecord({ cache: { last_turn: { cache_read_tokens: 2048, cache_created_tokens: 256 } } }));
+    expect(summary).toContain("Cache:");
+    expect(summary).toContain("2048 read");
+    expect(summary).toContain("256 write");
   });
 
   test("shows JEV usage", () => {

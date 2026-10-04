@@ -49,7 +49,9 @@ test("proxy routes once per turn, keeps tool continuations, streams notices once
     expect(inputs).toHaveLength(2);
     expect(inputs[1].recentContext?.previous_assistant_excerpt).toBe("previous answer");
     expect(inputs[1].cache?.window).toBe("up to 1 hour, stopping at the most recent model switch");
-    expect(inputs[1].cache?.observed_responses).toBeGreaterThanOrEqual(0);
+    expect(typeof inputs[1].cache?.observed_responses).toBe("number");
+    expect(inputs[1].cache).not.toHaveProperty("model");
+    expect(inputs[1].cache).not.toHaveProperty("last_response_model");
     const last = captured.at(-1)!.body;
     expect(last.reasoning?.effort).toBe("low");
     expect((last.input as Item[]).some(item => item.type === "configuration_update" && item.reasoning?.effort === "high")).toBe(true);
@@ -540,6 +542,41 @@ test("summarizeCacheRun: unknown-count responses still count and mark model swit
   expect(result.observed_responses).toBe(1);
   expect(result.cache_read_tokens_avg).toBe(5000);
   expect(result.cache_created_tokens_avg).toBe(200);
+});
+
+test("summarizeCacheRun: unknown-count same-model observations still increase observed_responses", () => {
+  const now = Date.now();
+  const observations = [
+    { model: "gpt-6-luna", read: null, created: null, at: now - 120_000 },
+    { model: "gpt-6-luna", read: null, created: null, at: now - 60_000 },
+    { model: "gpt-6-luna", read: 3000, created: 100, at: now - 30_000 },
+  ];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(3);
+  expect(result.cache_read_tokens_avg).toBe(3000);
+  expect(result.cache_created_tokens_avg).toBe(100);
+});
+
+test("summarizeCacheRun: newest observation is different model yields zero count", () => {
+  const now = Date.now();
+  const observations = [
+    { model: "gpt-6-luna", read: 1000, created: 500, at: now - 120_000 },
+    { model: "gpt-6.1-sol", read: 2000, created: 200, at: now - 60_000 },
+  ];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(0);
+  expect(result.newest_seconds_ago).toBeUndefined();
+  expect(result.oldest_seconds_ago).toBeUndefined();
+  expect(result.cache_read_tokens_avg).toBeNull();
+  expect(result.cache_created_tokens_avg).toBeNull();
+});
+
+test("summarizeCacheRun: exact 1-hour boundary is included", () => {
+  const now = Date.now();
+  const observations = [{ model: "gpt-6-luna", read: 1000, created: 200, at: now - 3_600_000 }];
+  const result = summarizeCacheRun(observations, "gpt-6-luna", now);
+  expect(result.observed_responses).toBe(1);
+  expect(result.newest_seconds_ago).toBe(3600);
 });
 
 test("summarizeCacheRun: empty history yields zero count, null averages, no ages", () => {

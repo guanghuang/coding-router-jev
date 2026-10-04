@@ -119,9 +119,16 @@ export function formatSummary(record: LogRecord): string {
   }
 
   if (record.cache) {
-    const last = record.cache.last_turn as { cache_read_tokens?: number; cache_created_tokens?: number } | null | undefined;
-    if (last && (last.cache_read_tokens !== undefined || last.cache_created_tokens !== undefined)) {
-      parts.push(`Cache: ${formatValue(last.cache_read_tokens)} read / ${formatValue(last.cache_created_tokens)} write`);
+    const observed = record.cache.observed_responses;
+    if (typeof observed === "number") {
+      const readAvg = record.cache.cache_read_tokens_avg;
+      const createdAvg = record.cache.cache_created_tokens_avg;
+      parts.push(`Cache: ${observed} observations, ${formatValue(readAvg)} avg read / ${formatValue(createdAvg)} avg write`);
+    } else {
+      const last = record.cache.last_turn as { cache_read_tokens?: number; cache_created_tokens?: number } | null | undefined;
+      if (last && (last.cache_read_tokens !== undefined || last.cache_created_tokens !== undefined)) {
+        parts.push(`Cache: ${formatValue(last.cache_read_tokens)} read / ${formatValue(last.cache_created_tokens)} write`);
+      }
     }
   }
 
