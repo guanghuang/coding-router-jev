@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { configFromEnv } from "../src/config";
@@ -164,5 +164,58 @@ test.each([true, false])("a provider retry reuses the JEV decision and displays 
     expect(await (await request()).text()).not.toContain("[Jev]");
     expect(jevCalls).toBe(1);
     expect((await readFile(proxy.logPath, "utf8")).trim().split("\n")).toHaveLength(1);
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("startup cleanup removes stale logs and preserves recent ones when retention is set", async () => {
+  const { writeFile: writeFileSync, utimesSync } = await import("node:fs");
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-cleanup-proxy-"));
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(directory, { recursive: true });
+  const DAY_MS = 86_400_000;
+  const staleFile = join(directory, "codex-stale-session.jsonl");
+  const recentFile = join(directory, "codex-recent-session.jsonl");
+  const unrelatedFile = join(directory, "notes.txt");
+  await writeFile(staleFile, "old\n");
+  await writeFile(recentFile, "recent\n");
+  await writeFile(unrelatedFile, "keep\n");
+  const past = new Date(Date.now() - 20 * DAY_MS);
+  utimesSync(staleFile, past, past);
+
+  const config = configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "10" });
+  expect(config.logRetentionDays).toBe(10);
+
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ models: [] }) });
+  const proxy = startProxy(config, { apiBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
+    route: async input => result(input, "fast", "low"),
+  });
+  try {
+    const remaining = await readdir(directory);
+    expect(remaining).not.toContain("codex-stale-session.jsonl");
+    expect(remaining).toContain("codex-recent-session.jsonl");
+    expect(remaining).toContain("notes.txt");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("startup does not delete logs when logRetentionDays is undefined", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-no-cleanup-proxy-"));
+  const { mkdirSync, utimesSync } = await import("node:fs");
+  mkdirSync(directory, { recursive: true });
+  const DAY_MS = 86_400_000;
+  const staleFile = join(directory, "codex-old.jsonl");
+  await writeFile(staleFile, "old\n");
+  const past = new Date(Date.now() - 100 * DAY_MS);
+  utimesSync(staleFile, past, past);
+
+  const config = configFromEnv({});
+  expect(config.logRetentionDays).toBeUndefined();
+
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ models: [] }) });
+  const proxy = startProxy(config, { apiBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
+    route: async input => result(input, "fast", "low"),
+  });
+  try {
+    const remaining = await readdir(directory);
+    expect(remaining).toContain("codex-old.jsonl");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });

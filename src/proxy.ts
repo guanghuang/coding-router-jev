@@ -3,7 +3,7 @@ import type { Config } from "./config";
 import { conversationKey, hash, newTurn, recentContext } from "./context";
 import { applyEffort, type EffortState } from "./effort";
 import { formatFeedback, type FeedbackValues } from "./feedback";
-import { sessionHistory } from "./history";
+import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult } from "./router";
 import { observeStream, type Usage } from "./stream";
@@ -37,7 +37,9 @@ export const codexArgs = (baseURL: string, args: string[]) => [
 
 export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void } = {}) {
   const route = options.route ?? createRouter();
-  const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, options.logDirectory);
+  const logDir = options.logDirectory ?? DEFAULT_LOG_DIR;
+  if (config.logRetentionDays !== undefined) cleanupStaleLogs(logDir, config.logRetentionDays);
+  const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, logDir);
   const catalog = new Map<string, CatalogModel>();
   const states = new Map<string, State>();
   const locks = new Map<string, Promise<unknown>>();

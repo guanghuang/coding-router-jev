@@ -15,6 +15,7 @@ export type Config = {
   minConfidence: number;
   sendRecentContext: boolean;
   feedbackFormat: string | undefined;
+  logRetentionDays: number | undefined;
 };
 
 export function parseEnvFile(text: string): Record<string, string> {
@@ -51,5 +52,12 @@ export function configFromEnv(environment: Record<string, string | undefined> = 
     minConfidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.30,
     sendRecentContext: value("CODING_ROUTER_SEND_RECENT_CONTEXT", "true") === "true",
     feedbackFormat: value("CODING_ROUTER_FEEDBACK_FORMAT", "") || undefined,
+    logRetentionDays: parseRetentionDays(value("CODING_ROUTER_LOG_RETENTION_DAYS", "")),
   };
+}
+
+function parseRetentionDays(raw: string): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }

@@ -17,6 +17,7 @@ describe("configuration", () => {
       minConfidence: 0.3,
       sendRecentContext: true,
       feedbackFormat: undefined,
+      logRetentionDays: undefined,
     });
   });
 
@@ -54,5 +55,20 @@ describe("configuration", () => {
   test("uses valid confidence override and falls back for invalid values", () => {
     expect(configFromEnv({ CODING_ROUTER_MIN_CONFIDENCE: "0.42" }).minConfidence).toBe(0.42);
     expect(configFromEnv({ CODING_ROUTER_MIN_CONFIDENCE: "2" }).minConfidence).toBe(0.3);
+  });
+
+  test("parses positive log retention days", () => {
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "30" }).logRetentionDays).toBe(30);
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "7" }).logRetentionDays).toBe(7);
+  });
+
+  test("returns undefined for non-positive, invalid, or missing retention days", () => {
+    expect(configFromEnv({}).logRetentionDays).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "" }).logRetentionDays).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "  " }).logRetentionDays).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "0" }).logRetentionDays).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "-5" }).logRetentionDays).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "abc" }).logRetentionDays).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "Infinity" }).logRetentionDays).toBeUndefined();
   });
 });
