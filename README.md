@@ -10,7 +10,19 @@ All installation paths require the Codex CLI (`codex`) installed separately with
 
 The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout.
 
-The repository is currently **private**. Installation commands that fetch raw files from `raw.githubusercontent.com` or download release assets without authentication will fail until the repository is made public. The sections below label each command as **Private repository** (requires `GH_TOKEN` or `gh auth login`) or **Public repository (once public)** so you can tell at a glance which commands work today.
+The repository is currently **private**. Installation commands that fetch raw files from `raw.githubusercontent.com` or download release assets without authentication will fail until the repository is made public. The sections below label each command as **Private repository** or **Public repository (once public)** so you can tell at a glance which commands work today.
+
+**Private repository authentication:** `install.sh` and `install.ps1` attach `Authorization` only when **`GH_TOKEN` is set in the environment**. They do not read the GitHub CLI credential store. After `gh auth login`, export a token for the installer session:
+
+```sh
+export GH_TOKEN="$(gh auth token)"   # macOS/Linux
+```
+
+```powershell
+$env:GH_TOKEN = gh auth token        # Windows PowerShell
+```
+
+Use a fine-grained or classic PAT with read access to this repository and its releases if you do not use the GitHub CLI. `GH_TOKEN` is used only for in-process HTTP requests; the installers never write it to disk or to `~/.coding-router-jev.env`.
 
 ## Install from release (recommended)
 
@@ -26,24 +38,46 @@ The `install.sh` script detects your OS and architecture, downloads the correct 
 curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
 ```
 
+Prefer [download and review](#download-and-review-before-executing-macoslinux) or pin a release tag instead of piping `main` blindly.
+
 **Private repository (requires authentication):**
 
 ```sh
-# Option 1: Set GH_TOKEN and run locally
-curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
-GH_TOKEN=ghp_your_token sh install.sh
-
-# Option 2: Clone and run from source checkout
-git clone https://github.com/guanghuang/coding-router-jev.git
-GH_TOKEN=ghp_your_token sh coding-router-jev/install.sh
+# Recommended: clone with gh, then install from the checkout
+gh auth login
+gh repo clone guanghuang/coding-router-jev
+export GH_TOKEN="$(gh auth token)"
+sh coding-router-jev/install.sh
 ```
 
-**Download and review before executing:**
+```sh
+# Alternative: download install.sh with an authenticated request, then run
+export GH_TOKEN="ghp_your_token"
+curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
+  https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
+sh install.sh
+unset GH_TOKEN
+```
+
+#### Download and review before executing (macOS/Linux)
+
+**Public repository (once public):**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
 less install.sh      # review the script
 sh install.sh        # run after review
+```
+
+**Private repository:**
+
+```sh
+export GH_TOKEN="$(gh auth token)"
+curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
+  https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
+less install.sh
+sh install.sh
+unset GH_TOKEN
 ```
 
 #### Installer flags (macOS/Linux)
@@ -53,7 +87,7 @@ sh install.sh        # run after review
 | `--version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `--dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `~/.local/bin`). Use an absolute path; `~` is not expanded. |
 | `--help` | — | Show usage |
-| — | `GH_TOKEN` | GitHub token for private repository access |
+| — | `GH_TOKEN` | GitHub token for private release/API access (process environment only; not saved by the installer) |
 
 **Version pinning and rollback:**
 
@@ -94,26 +128,47 @@ The `install.ps1` PowerShell script downloads the Windows x64 binary, verifies i
 irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
 ```
 
+Prefer [download and review](#download-and-review-before-executing-windows) when you want to inspect the script first.
+
 **Private repository (requires authentication):**
 
 ```powershell
-# Option 1: Set GH_TOKEN and run
-$env:GH_TOKEN = "ghp_your_token"
-irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
-.\install.ps1
-
-# Option 2: Clone and run from source checkout
-git clone https://github.com/guanghuang/coding-router-jev.git
-$env:GH_TOKEN = "ghp_your_token"
+# Recommended: clone with gh, then install from the checkout
+gh auth login
+gh repo clone guanghuang/coding-router-jev
+$env:GH_TOKEN = gh auth token
 .\coding-router-jev\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 ```
 
-**Download and review before executing:**
+```powershell
+# Alternative: download install.ps1 with an authenticated request
+$env:GH_TOKEN = "ghp_your_token"
+$headers = @{ Authorization = "token $env:GH_TOKEN" }
+Invoke-RestMethod -Uri "https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1" -Headers $headers -OutFile install.ps1
+.\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+```
+
+#### Download and review before executing (Windows)
+
+**Public repository (once public):**
 
 ```powershell
 irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
 Get-Content install.ps1   # review the script
 .\install.ps1              # run after review
+```
+
+**Private repository:**
+
+```powershell
+$env:GH_TOKEN = gh auth token
+$headers = @{ Authorization = "token $env:GH_TOKEN" }
+Invoke-RestMethod -Uri "https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1" -Headers $headers -OutFile install.ps1
+Get-Content install.ps1
+.\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 ```
 
 #### Installer flags (Windows)
@@ -123,7 +178,7 @@ Get-Content install.ps1   # review the script
 | `-Version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `-Dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `$env:LOCALAPPDATA\coding-router-jev\bin`) |
 | `-Help` | — | Show usage |
-| — | `GH_TOKEN` | GitHub token for private repository access |
+| — | `GH_TOKEN` | GitHub token for private release/API access (process environment only; not saved by the installer) |
 
 **Version pinning and rollback:**
 
@@ -191,15 +246,27 @@ Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; ma
 - **Windows**: SmartScreen displays a warning on first run. Click **More info → Run anyway**. The `install.ps1` installer does not trigger SmartScreen because it runs within PowerShell.
 - **Linux**: No code-signing enforcement. glibc is required; the installer detects musl/Alpine and exits with a clear error.
 
-**Minimum platform requirements:**
+**Expected platform targets** (installers do not enforce OS version checks; unsupported combinations may fail at runtime):
 
-| Platform | Minimum | Notes |
-|----------|---------|-------|
-| macOS (ARM64) | macOS 11 Big Sur | Apple Silicon native |
-| macOS (x64) | macOS 10.15 Catalina | Intel; Rosetta 2 runs ARM64 binaries on Apple Silicon |
-| Linux (x64) | glibc 2.17+, SSE4.2 | Tested on Ubuntu 22.04 |
-| Linux (ARM64) | glibc 2.17+ | Tested on Ubuntu 22.04 aarch64 |
-| Windows (x64) | Windows 10 1809+ | Native x64 only; ARM64 not supported |
+| Platform | Target | Notes |
+| --- | --- | --- |
+| macOS (ARM64) | Apple Silicon | Prefer `codex-jev-darwin-arm64` |
+| macOS (x64) | Intel Macs; Apple Silicon via Rosetta 2 | Use `codex-jev-darwin-x64` only when you need the Intel build |
+| Linux (x64) | glibc Linux, SSE4.2 | CI smoke-tested on Ubuntu 22.04 x64 |
+| Linux (ARM64) | glibc Linux | Cross-compiled in CI; not yet run on ARM64 hardware |
+| Windows (x64) | Windows 10+ x64 | Native x64 only; ARM64 not supported |
+
+## Run (release install)
+
+After installing a release binary, use `codex-jev` like the Codex CLI:
+
+```sh
+codex-jev --help
+codex-jev exec "explain this repository"
+codex-jev resume --last
+```
+
+Configure routing via `~/.coding-router-jev.env` (see [Configuration](#configuration)). `--help` and `--version` reflect the underlying Codex CLI.
 
 ## Install from source (Bun required)
 
@@ -423,15 +490,11 @@ Ensure the installer's directory appears **before** the conflicting directory in
 
 ### Unsupported architecture or OS
 
-The installer exits with a clear error on unsupported platforms:
-
-- **Alpine Linux / musl**: glibc is required. Use a glibc-based distribution.
-- **Windows ARM64**: Only Windows x64 is supported.
-- **Other architectures** (32-bit, RISC-V, etc.): Not supported.
+Installers print explicit errors such as `Alpine Linux (musl) is not supported`, `musl libc detected`, `unsupported operating system`, `unsupported architecture`, or (Windows) `Windows ARM64 is not supported`. Use a supported OS/architecture from the [platform support](#platform-support) table.
 
 ### Checksum verification failure
 
-If `sha256sum --check SHA256SUMS` fails or the installer reports a checksum mismatch:
+If `sha256sum --check SHA256SUMS` fails or the installer reports `checksum mismatch`, `no checksum found for`, or `no SHA-256 tool found`:
 
 1. Re-download the binary and `SHA256SUMS` from the same release tag.
 2. Ensure you did not mix assets from different releases.
@@ -439,25 +502,35 @@ If `sha256sum --check SHA256SUMS` fails or the installer reports a checksum mism
 
 ### Authentication errors (private repository)
 
-While the repository is private, all downloads require authentication:
+While the repository is private, release downloads and (when not using a local checkout) raw script fetches require authentication. Set `GH_TOKEN` before running the installer:
 
 ```sh
-# macOS/Linux — set GH_TOKEN before running the installer
-export GH_TOKEN="ghp_your_token"
+export GH_TOKEN="$(gh auth token)"
 sh install.sh
+```
 
-# Windows PowerShell
-$env:GH_TOKEN = "ghp_your_token"
+```powershell
+$env:GH_TOKEN = gh auth token
 .\install.ps1
 ```
 
-If you see `401` or `403` errors, verify your token has `repo` scope and has not expired. You can also authenticate via `gh auth login` (the `gh` CLI) before running the installer.
+Look for `authorization failed while trying to` in installer output. `gh auth login` alone is not enough unless you export `GH_TOKEN` as above. If downloads of `install.sh` / `install.ps1` from `raw.githubusercontent.com` fail with 404/401, use `gh repo clone` or an authenticated `curl`/`Invoke-RestMethod` fetch (see the **Private repository** install sections above).
+
+Verify your token can read this repository and its releases (classic `repo` scope or fine-grained read access). Avoid prefix assignments like `GH_TOKEN=… sh install.sh` — they expose the token in process listings and shell history.
 
 ### Release not found / unavailable
 
 - Verify releases exist at [github.com/guanghuang/coding-router-jev/releases](https://github.com/guanghuang/coding-router-jev/releases).
 - When pinning a version (`--version v0.1.0`), ensure the tag exists.
+- Unix installers may report `release not found while trying to download …`; Windows may report `release asset not found: codex-jev-windows-x64.exe for …`.
 - The `workflow_dispatch` trigger builds but does not publish a release; only tag pushes create releases.
+
+### Windows install or upgrade errors
+
+- **`cannot replace … The file may be in use`**: Close any running `codex-jev` process and retry.
+- **`upgrade failed; previous installation restored`**: The new binary could not replace the old one; free the file lock and reinstall.
+- **`upgrade failed and restore failed`**: Rename the `.exe.old` backup next to `codex-jev.exe` manually if needed.
+- **`failed to install binary to`**: Check disk space and permissions under your install directory (`-Dir` / `$env:LOCALAPPDATA\coding-router-jev\bin` by default).
 
 ### macOS Gatekeeper blocks the binary
 
@@ -477,17 +550,19 @@ SmartScreen may show "Windows protected your PC" on first run. Click **More info
 
 Session logs are written to `${TMPDIR:-/tmp}/coding-router-jev/` on macOS/Linux. On Windows, the equivalent `%TEMP%` directory is used. Logs contain user prompts — treat them as confidential.
 
-## Verification status
+## Installer verification status
 
-Commands and installer behavior have been verified on:
+**Automated (CI / unit tests):** `install.sh` and `install.ps1` flows — download, checksum verification, version pinning, upgrade replace, auth headers with `GH_TOKEN`, config file preservation, and error handling — are covered by `test/install.test.ts` and `test/install-windows.test.ts`. Release workflow smoke-tests the Linux x64 binary.
 
-- **macOS (ARM64 and x64)**: `install.sh`, checksum verification, version pinning, upgrade, uninstall, PATH guidance, Gatekeeper quarantine removal.
-- **Linux (x64)**: `install.sh`, CI binary smoke test, checksum verification.
-- **Windows (x64)**: `install.ps1`, checksum verification, PATH management, SmartScreen behavior, locked-binary error handling.
+**Manually verified:**
+
+- **macOS (ARM64 and x64)**: End-to-end `install.sh`, PATH guidance, Gatekeeper quarantine removal.
+- **Linux (x64)**: End-to-end `install.sh` on Ubuntu 22.04.
+- **Windows (x64)**: End-to-end `install.ps1`, user PATH updates, SmartScreen on first binary run, locked-binary error when the executable is in use.
 
 **Not yet verified:**
 
-- Linux ARM64 hardware (CI cross-compiles but does not run the ARM64 binary).
+- Linux ARM64 on physical hardware (CI cross-compiles only).
 - Interactive multi-turn routing sessions on all platforms (verified locally on macOS only).
 - ChatGPT desktop or Work integration (not implemented; not advertised).
 
