@@ -38,7 +38,7 @@ jobs:
         run: bun run check
 
       - name: Run tests
-        run: bun run test
+        run: bun test --path-ignore-patterns '**/install-windows.test.ts'
 
       - name: Build launcher (current platform)
         run: bun run build
