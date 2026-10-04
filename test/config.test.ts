@@ -13,6 +13,7 @@ describe("configuration", () => {
         strong: "chatgpt-6.1-sol",
         long: "chatgpt-6-astra",
       },
+      startTier: "fast",
       longModelEnabled: false,
       minConfidence: 0.3,
       sendRecentContext: true,
@@ -70,5 +71,71 @@ describe("configuration", () => {
     expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "-5" }).logRetentionDays).toBeUndefined();
     expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "abc" }).logRetentionDays).toBeUndefined();
     expect(configFromEnv({ CODING_ROUTER_LOG_RETENTION_DAYS: "Infinity" }).logRetentionDays).toBeUndefined();
+  });
+
+  test("startup tier defaults to fast when unset or blank", () => {
+    expect(configFromEnv({}).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "  " }).startTier).toBe("fast");
+  });
+
+  test("startup tier falls back to fast for invalid values", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "turbo" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "medium" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "123" }).startTier).toBe("fast");
+  });
+
+  test("startup tier trims whitespace and normalizes case", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "  FAST  " }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "Strong" }).startTier).toBe("strong");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "BALANCED" }).startTier).toBe("balanced");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: " Long " }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: " Long ", CODING_ROUTER_LONG_MODEL_ENABLE: "true" }).startTier).toBe("long");
+  });
+
+  test("startup tier accepts each supported tier", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "fast" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "balanced" }).startTier).toBe("balanced");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "strong" }).startTier).toBe("strong");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long", CODING_ROUTER_LONG_MODEL_ENABLE: "true" }).startTier).toBe("long");
+  });
+
+  test("startup tier long falls back to fast when Long is disabled", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long" }).startTier).toBe("fast");
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long", CODING_ROUTER_LONG_MODEL_ENABLE: "false" }).startTier).toBe("fast");
+  });
+
+  test("startup tier long is accepted when Long is enabled", () => {
+    expect(configFromEnv({ CODING_ROUTER_START_TIER: "long", CODING_ROUTER_LONG_MODEL_ENABLE: "true" }).startTier).toBe("long");
+  });
+
+  test("shell environment overrides file START_TIER value", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "coding-router-jev-start-tier-"));
+    const file = join(dir, "settings.env");
+    const environment: Record<string, string | undefined> = {
+      CODING_ROUTER_START_TIER: "strong",
+    };
+    try {
+      await writeFile(file, "CODING_ROUTER_START_TIER=balanced\n");
+      await loadEnv(file, environment);
+      expect(environment.CODING_ROUTER_START_TIER).toBe("strong");
+      expect(configFromEnv(environment).startTier).toBe("strong");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("file-provided START_TIER is loaded when shell env is unset", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "coding-router-jev-start-tier-file-"));
+    const file = join(dir, "settings.env");
+    const environment: Record<string, string | undefined> = {};
+    try {
+      await writeFile(file, "CODING_ROUTER_START_TIER=balanced\n");
+      await loadEnv(file, environment);
+      expect(environment.CODING_ROUTER_START_TIER).toBe("balanced");
+      expect(configFromEnv(environment).startTier).toBe("balanced");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -79,9 +79,9 @@ test("disabled recent context is omitted and a failed JEV call keeps the current
   try {
     await fetch(`http://127.0.0.1:${proxy.port}/v1/responses`, { method: "POST", body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "old" }, { role: "assistant", content: "answer" }, { role: "user", content: "continue" }] }) }).then(res => res.text());
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("[Jev] tier: strong, model: chatgpt-6.1-sol, effort: medium; decision: JEV/unavailable, confidence: unavailable.");
+    expect(notices[0]).toContain("[Jev] tier: fast, model: chatgpt-6-luna, effort: medium; decision: JEV/unavailable, confidence: unavailable.");
     expect(seen?.recentContext).toBeUndefined();
-    expect(forwarded?.model).toBe("chatgpt-6.1-sol");
+    expect(forwarded?.model).toBe("chatgpt-6-luna");
     const record = JSON.parse((await readFile(proxy.logPath, "utf8")).trim());
     expect(record.decision.reason).toBe("jev-unavailable/no-change");
     expect(record.jev.error).toBe("timeout");
@@ -111,7 +111,7 @@ test("custom feedback format with all placeholders verified through proxy", asyn
     await send([first]);
     expect(notices).toHaveLength(1);
     // Turn 1: verify ALL placeholders including jev_tokens_input/output (M1+M3)
-    expect(notices[0]).toBe("[Jev] strong · gpt-6.1-sol · high · JEV/no-change · 0.90 · prev:gpt-6.1-sol · cr:unavailable · cw:unavailable · jin:1 · jout:1 · jtotal:2");
+    expect(notices[0]).toBe("[Jev] strong · gpt-6.1-sol · high · JEV · 0.90 · prev:chatgpt-6-luna · cr:unavailable · cw:unavailable · jin:1 · jout:1 · jtotal:2");
     // Turn 2: routes to balanced; previous_model should reflect model from turn 1 (M2)
     const second: Item = { role: "user", content: "follow up" };
     await send([first, { role: "assistant", content: "answer" }, second]);
@@ -612,4 +612,189 @@ test("existing session fields remain in the built JEV request", () => {
   expect(cache.observed_responses).toBe(0);
   expect(cache).not.toHaveProperty("model");
   expect(cache).not.toHaveProperty("last_response_model");
+});
+
+test("default startup tier is fast and first JEV input reflects configured fast model", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-startup-default-"));
+  const inputs: RoutingInput[] = [];
+  let forwarded: CodexBody | undefined;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    forwarded = await req.json() as CodexBody;
+    return Response.json({ model: forwarded.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => { inputs.push(input); return result(input, "fast", "low"); };
+  const proxy = startProxy(configFromEnv({}), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "hello" }] }) }).then(r => r.text());
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].currentTier).toBe("fast");
+    expect(inputs[0].currentModel).toBe("gpt-6-luna");
+    expect(forwarded?.model).toBe("gpt-6-luna");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("custom startup tier strong is honored", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-startup-strong-"));
+  const inputs: RoutingInput[] = [];
+  let forwarded: CodexBody | undefined;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    forwarded = await req.json() as CodexBody;
+    return Response.json({ model: forwarded.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => { inputs.push(input); return result(input, "strong", "high"); };
+  const proxy = startProxy(configFromEnv({ CODING_ROUTER_START_TIER: "strong" }), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "diagnose" }] }) }).then(r => r.text());
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].currentTier).toBe("strong");
+    expect(inputs[0].currentModel).toBe("gpt-6.1-sol");
+    expect(forwarded?.model).toBe("gpt-6.1-sol");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("JEV failure falls back to configured startup tier rather than strong", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-startup-fallback-"));
+  const notices: string[] = [];
+  let forwarded: CodexBody | undefined;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    forwarded = await req.json() as CodexBody;
+    return Response.json({ model: forwarded.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const config = configFromEnv({ CODING_ROUTER_START_TIER: "balanced" });
+  const proxy = startProxy(config, { apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory, onNotice: n => notices.push(n),
+    route: async input => ({ request: buildRequest(input), response: null, error: "timeout", ms: 3000 }),
+  });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "test" }] }) }).then(r => r.text());
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("tier: balanced");
+    expect(notices[0]).toContain("model: gpt-6.1-sol");
+    expect(forwarded?.model).toBe("gpt-6.1-sol");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("restart resets to configured startup tier, not previous session final tier", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-startup-restart-"));
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    return Response.json({ model: body.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const config = configFromEnv({});
+  const cacheKey = "restart-conversation";
+  try {
+    const inputs1: RoutingInput[] = [];
+    const route1: Route = async input => { inputs1.push(input); return result(input, "strong", "high"); };
+    const proxy1 = startProxy(config, { route: route1, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+    try {
+      await fetch(`http://127.0.0.1:${proxy1.port}/models`).then(r => r.json());
+      await fetch(`http://127.0.0.1:${proxy1.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, prompt_cache_key: cacheKey, input: [{ role: "user", content: "hard problem" }] }) }).then(r => r.text());
+      expect(inputs1[0].currentTier).toBe("fast");
+    } finally { proxy1.close(); }
+
+    const inputs2: RoutingInput[] = [];
+    const route2: Route = async input => { inputs2.push(input); return result(input, "fast", "low"); };
+    const proxy2 = startProxy(config, { route: route2, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+    try {
+      await fetch(`http://127.0.0.1:${proxy2.port}/models`).then(r => r.json());
+      await fetch(`http://127.0.0.1:${proxy2.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, prompt_cache_key: cacheKey, input: [{ role: "user", content: "simple task" }] }) }).then(r => r.text());
+      expect(inputs2[0].currentTier).toBe("fast");
+      expect(inputs2[0].currentModel).toBe("gpt-6-luna");
+    } finally { proxy2.close(); }
+  } finally { upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("startup model uses catalog alias resolution with custom fast model", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-startup-alias-"));
+  const inputs: RoutingInput[] = [];
+  let forwarded: CodexBody | undefined;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna-v2", display_name: "Luna v2", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    forwarded = await req.json() as CodexBody;
+    return Response.json({ model: forwarded.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => { inputs.push(input); return result(input, "fast", "low"); };
+  const config = configFromEnv({ CODING_ROUTER_FAST_MODEL_CODEX: "chatgpt-6-luna-v2" });
+  const proxy = startProxy(config, { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "hello" }] }) }).then(r => r.text());
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].currentTier).toBe("fast");
+    expect(inputs[0].currentModel).toBe("gpt-6-luna-v2");
+    expect(forwarded?.model).toBe("gpt-6-luna-v2");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("startup model resolves chatgpt-6 alias to catalog gpt-6 slug", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-startup-canonical-"));
+  const inputs: RoutingInput[] = [];
+  let forwarded: CodexBody | undefined;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    forwarded = await req.json() as CodexBody;
+    return Response.json({ model: forwarded.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => { inputs.push(input); return result(input, "balanced", "medium"); };
+  const proxy = startProxy(configFromEnv({ CODING_ROUTER_START_TIER: "balanced" }), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "hello" }] }) }).then(r => r.text());
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].currentTier).toBe("balanced");
+    expect(inputs[0].currentModel).toBe("gpt-6.1-sol");
+    expect(forwarded?.model).toBe("gpt-6.1-sol");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("explicit model requests remain untouched with startup tier configured", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-startup-explicit-"));
+  const captured: { body: CodexBody }[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    captured.push({ body });
+    return Response.json({ model: body.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async () => { throw new Error("should not route"); };
+  const proxy = startProxy(configFromEnv({ CODING_ROUTER_START_TIER: "balanced" }), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "gpt-6-luna", input: [{ role: "user", content: "hello" }] }) }).then(r => r.text());
+    expect(captured[0].body.model).toBe("gpt-6-luna");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
