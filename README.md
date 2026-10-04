@@ -4,7 +4,38 @@ A TypeScript/Bun wrapper that routes Codex user turns through JEV. The `codex-je
 
 ## Prerequisites
 
-Both installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
+All installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
+
+## Install from release (recommended)
+
+Download a prebuilt standalone binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases). No Bun installation required.
+
+```sh
+# Download the latest release (requires gh CLI and repository access)
+gh release download --repo guanghuang/coding-router-jev --pattern 'codex-jev-linux-x64'
+chmod +x codex-jev-linux-x64
+mv codex-jev-linux-x64 ~/.local/bin/codex-jev
+```
+
+Verify the download checksum (the downloaded binary and `SHA256SUMS` must be in the same directory):
+
+```sh
+gh release download --repo guanghuang/coding-router-jev --pattern 'SHA256SUMS'
+sha256sum --check SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
+# Only the files present in the directory are checked; missing files cause an error.
+```
+
+### Platform support
+
+| Binary | OS | Architecture | Notes |
+|--------|----|-------------|-------|
+| `codex-jev-darwin-arm64` | macOS | Apple Silicon | Unsigned |
+| `codex-jev-darwin-x64` | macOS | Intel | Unsigned |
+| `codex-jev-linux-arm64` | Linux | ARM64 | glibc required |
+| `codex-jev-linux-x64` | Linux | x64 | glibc, SSE4.2 minimum |
+| `codex-jev-windows-x64.exe` | Windows | x64 | Unsigned |
+
+Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; macOS Gatekeeper may require `xattr -d com.apple.quarantine codex-jev-darwin-*` after download.
 
 ## Install from source (Bun required)
 
@@ -53,7 +84,7 @@ bun run src/cli.ts exec "explain this repository"
 
 ## Compiled launcher (Bun not required at runtime)
 
-Build a standalone local launcher that does not require Bun at runtime:
+For prebuilt binaries, see [Install from release](#install-from-release-recommended). To build locally:
 
 ```sh
 bun run build
@@ -186,6 +217,17 @@ bun run check
 bun test
 bun run build
 ```
+
+### Releasing
+
+Bump `version` in `package.json`, then push a matching tag:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The `.github/workflows/release.yml` workflow validates, cross-compiles, and publishes release assets. The tag version must match `package.json`. Trigger `workflow_dispatch` manually to test the build pipeline without publishing — the version-tag check is skipped and the release job runs only on tag push.
 
 Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
 

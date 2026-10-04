@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Fake codex stub for smoke-testing the compiled launcher binary.
+# Prints received arguments as JSON and exits 0 so CI can verify
+# that the launcher forwarded args correctly without real credentials.
+if ! command -v jq >/dev/null 2>&1; then
+  echo '{"stub":"codex","argv":["jq-not-available"]}'
+  exit 0
+fi
+echo '{"stub":"codex","argv":'"$(printf '%s\n' "$@" | jq -R . | jq -s .)"'}'
+exit 0
