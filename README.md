@@ -352,6 +352,7 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 | `CODING_ROUTER_MIN_CONFIDENCE` | `0.30`; valid range `0`–`1`, invalid values fall back |
 | `CODING_ROUTER_SEND_RECENT_CONTEXT` | `true` |
 | `CODING_ROUTER_FEEDBACK_FORMAT` | See [Feedback format](#feedback-format) below; unset uses the built-in notice |
+| `CODING_ROUTER_LOG_RETENTION_DAYS` | Unset (no cleanup); positive number enables startup deletion of stale session logs older than this many days |
 
 Configured model choices take priority over catalog detection. The catalog enriches descriptions and effort capabilities. The requested `chatgpt-6*` default names resolve to `gpt-6*` when that corresponding ID appears in the Codex catalog; otherwise the configured ID is sent unchanged. Set an exact provider model ID if your account does not advertise that alias. Account model availability is ultimately enforced by the provider.
 
@@ -440,7 +441,11 @@ Each JEV exchange appends one JSON line to a session-specific file under `${TMPD
 tail -f "${TMPDIR:-/tmp}/coding-router-jev/codex-<process-id>-<uuid>.jsonl"
 ```
 
-Logs contain user prompts and routing payloads (including optional recent context excerpts). Treat JSONL files as confidential; do not paste them into public issues without redaction. They grow by appending, and normal OS temporary-file cleanup may remove them. If writing a log entry fails, the router prints `[Jev] could not write routing history` to stderr and continues. Automatic log rotation is not implemented.
+Logs contain user prompts and routing payloads (including optional recent context excerpts). Treat JSONL files as confidential; do not paste them into public issues without redaction. They grow by appending, and normal OS temporary-file cleanup may remove them. If writing a log entry fails, the router prints `[Jev] could not write routing history` to stderr and continues.
+
+### Log retention
+
+Set `CODING_ROUTER_LOG_RETENTION_DAYS` to a positive number in the process environment or `~/.coding-router-jev.env` to enable startup cleanup. When the launcher starts, session JSONL files in the log directory whose modification time is older than the configured number of days are deleted. Only files matching the router's own `codex-*.jsonl` naming convention are considered; unrelated files and directories are never touched. If the setting is missing, blank, invalid, zero, or negative, no logs are deleted. Cleanup runs once at startup; there is no background timer. If an individual stale file cannot be removed, the error is logged and the launcher continues normally.
 
 ## Resume
 
