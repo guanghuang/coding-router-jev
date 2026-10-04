@@ -272,7 +272,7 @@ While the repository is private, Pi needs authenticated Git access. Configure Gi
 pi install git:github.com/guanghuang/coding-router-jev
 ```
 
-Pi clones the repository, resolves dependencies through its supported mechanism, and registers the package. Do not include credential URLs in the install command.
+Pi clones the repository, resolves dependencies through its supported mechanism, and registers the package. Do not include credential URLs in the install command. If using `GH_TOKEN`, avoid inline assignment (`GH_TOKEN=… pi install …`) — it exposes the token in process listings and shell history. Export the token first, then unset it after installation.
 
 For **local development**, install from an absolute path to your checkout:
 
@@ -294,7 +294,7 @@ After the repository is made public, install from a released tag:
 pi install git:github.com/guanghuang/coding-router-jev@v0.1.0
 ```
 
-Replace `v0.1.0` with the desired release tag. Omit the tag to track the default branch.
+Replace `v0.1.0` with the desired release tag. Omitting the tag tracks the default branch, which may introduce unexpected changes on reinstall — prefer pinning a tag for reproducible installs.
 
 ### Select the virtual model
 
@@ -320,7 +320,7 @@ Pi authenticates against the model provider separately from the TypeSafe classif
 1. **Provider login** — run `pi provider login openai-codex` to authenticate with your OpenAI Codex subscription. This grants Pi access to the inference models (`gpt-6-luna`, `gpt-6.1-sol`, etc.).
 2. **TypeSafe API key** — set `TYPESAFE_API_KEY` in your environment or `~/.coding-router-jev.env`. This key is read directly by the TypeSafe SDK for JEV classification requests. It is not passed to Pi or the provider.
 
-Both credentials are required for Pi routing. Without the provider credential, model requests fail at the provider. Without the TypeSafe key, JEV classification is disabled and the adapter cannot route.
+Both credentials are required for full Pi routing. Without the provider credential, model requests fail at the provider. Without the TypeSafe key, JEV classification is unavailable and the adapter falls back to the current or startup model without reclassifying.
 
 Supported catalog models and provider names must match those verified against Pi 1.0.2. Use `pi model list` to see available models after provider login.
 
@@ -781,13 +781,13 @@ The `jev-logs` skill is delivered by this package and is visible only when the p
 
 | Platform | Codex (codex-jev) | Pi (jev/auto) | Notes |
 | --- | --- | --- | --- |
-| macOS (ARM64) | ✓ Binary + source | ✓ Git/local install | Tested end-to-end |
-| macOS (x64) | ✓ Binary + source | ✓ Git/local install | Tested end-to-end |
-| Linux (x64) | ✓ Binary + source | ✓ Git/local install | Tested on Ubuntu; glibc required |
-| Linux (ARM64) | ✓ Binary (cross-compiled) | ✓ Git/local install | Not yet tested on ARM64 hardware |
-| Windows (x64) | ✓ Binary + source | ✓ Git/local install | PowerShell paths; ARM64 not supported |
+| macOS (ARM64) | Binary + source | Git/local install | Codex tested end-to-end; Pi manifest validated in unit tests |
+| macOS (x64) | Binary + source | Git/local install | Codex tested end-to-end; Pi manifest validated in unit tests |
+| Linux (x64) | Binary + source | Git/local install | Codex tested on Ubuntu; Pi manifest validated in unit tests; glibc required |
+| Linux (ARM64) | Binary (cross-compiled) | Git/local install | Not yet tested on ARM64 hardware |
+| Windows (x64) | Binary + source | Git/local install | PowerShell paths; ARM64 not supported |
 
-Pi support requires `@earendil-works/pi-coding-agent` ≥ 1.0.2. Claude adapter support is future work and does not ship with this release.
+Pi support requires `@earendil-works/pi-coding-agent` ≥ 1.0.2. Pi runtime installation and resource discovery are documented but not automated in CI; platform-specific smoke tests should be run manually. Claude adapter support is future work and does not ship with this release.
 
 ## Attribution
 

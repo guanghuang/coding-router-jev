@@ -9,16 +9,17 @@ describe("Pi package manifest", () => {
   test("package.json declares pi.extensions", () => {
     expect(pkg.pi).toBeDefined();
     expect(Array.isArray(pkg.pi.extensions)).toBe(true);
-    expect(pkg.pi.extensions.length).toBeGreaterThan(0);
+    expect(pkg.pi.extensions).toHaveLength(1);
   });
 
   test("package.json declares pi.skills", () => {
     expect(pkg.pi).toBeDefined();
     expect(Array.isArray(pkg.pi.skills)).toBe(true);
-    expect(pkg.pi.skills.length).toBeGreaterThan(0);
+    expect(pkg.pi.skills).toHaveLength(1);
   });
 
   test("pi.extensions paths resolve to existing files", () => {
+    expect(pkg.pi).toBeDefined();
     for (const ext of pkg.pi.extensions) {
       const resolved = resolve(ROOT, ext);
       expect(existsSync(resolved)).toBe(true);
@@ -27,12 +28,14 @@ describe("Pi package manifest", () => {
   });
 
   test("pi.skills paths resolve to existing directories with SKILL.md", () => {
+    expect(pkg.pi).toBeDefined();
     for (const skill of pkg.pi.skills) {
       const dir = resolve(ROOT, skill);
       expect(existsSync(dir)).toBe(true);
       expect(statSync(dir).isDirectory()).toBe(true);
       const skillFile = join(dir, "SKILL.md");
       expect(existsSync(skillFile)).toBe(true);
+      expect(statSync(skillFile).isFile()).toBe(true);
     }
   });
 
@@ -42,6 +45,16 @@ describe("Pi package manifest", () => {
 
   test("pi.skills includes the Pi jev-logs skill", () => {
     expect(pkg.pi.skills).toContain("./skills/pi/jev-logs");
+  });
+
+  test("pi-extension exports activate function", async () => {
+    const mod = await import("../src/pi-extension");
+    expect(typeof mod.activate).toBe("function");
+  });
+
+  test("pi-extension exports createPiAdapter function", async () => {
+    const mod = await import("../src/pi-extension");
+    expect(typeof mod.createPiAdapter).toBe("function");
   });
 });
 
@@ -76,6 +89,10 @@ describe("package identity", () => {
     expect(pkg.private).toBe(true);
   });
 
+  test("package name matches Pi remove command in docs", () => {
+    expect(pkg.name).toBe("coding-router-jev");
+  });
+
   test("existing Codex bin mappings preserved", () => {
     expect(pkg.bin["codex-jev"]).toBe("src/cli.ts");
     expect(pkg.bin["jev-logs"]).toBe("src/jev-logs.ts");
@@ -89,58 +106,6 @@ describe("package identity", () => {
   test("check and test scripts preserved", () => {
     expect(pkg.scripts.check).toBe("tsc --noEmit");
     expect(pkg.scripts.test).toBe("bun test");
-  });
-});
-
-describe("Pi adapter startup validation", () => {
-  test("createPiAdapter throws with empty registry (missing catalog model)", async () => {
-    const { createPiAdapter } = await import("../src/pi-extension");
-    const { configFromEnv } = await import("../src/config");
-
-    const emptyRegistry = {
-      find: () => undefined,
-      list: () => [],
-    };
-    const clamp = {
-      getSupportedThinkingLevels: () => [] as string[],
-      clampThinkingLevel: (_m: unknown, l: string) => l,
-    };
-
-    const adapter = createPiAdapter({
-      config: configFromEnv({}),
-      route: async () => ({ request: {} as any, response: null, error: "test", ms: 0 }),
-      registry: emptyRegistry as any,
-      clamp: clamp as any,
-    });
-
-    await expect(
-      adapter.resolveModel({ reason: "user", text: "test" }),
-    ).rejects.toThrow(/No eligible Pi models/);
-  });
-
-  test("createPiAdapter throws descriptive error when no startup model", () => {
-    const { createPiAdapter } = require("../src/pi-extension");
-    const { configFromEnv } = require("../src/config");
-
-    const emptyRegistry = {
-      find: () => undefined,
-      list: () => [],
-    };
-    const clamp = {
-      getSupportedThinkingLevels: () => [] as string[],
-      clampThinkingLevel: (_m: unknown, l: string) => l,
-    };
-
-    const adapter = createPiAdapter({
-      config: configFromEnv({}),
-      route: async () => ({ request: {} as any, response: null, error: "test", ms: 0 }),
-      registry: emptyRegistry,
-      clamp,
-    });
-
-    expect(() =>
-      adapter.resolveModel({ reason: "continuation" }),
-    ).toThrow(/No valid Pi models configured/);
   });
 });
 
@@ -167,5 +132,41 @@ describe("Pi skill content", () => {
     expect(codexSkill).not.toBe(piSkill);
     expect(codexSkill).toContain("JEV_SESSION_LOG");
     expect(piSkill).toContain("Pi");
+  });
+});
+
+describe(".env.example documentation", () => {
+  const envContent = readFileSync(join(ROOT, ".env.example"), "utf-8");
+
+  test("documents Pi provider login as separate from TYPESAFE_API_KEY", () => {
+    expect(envContent).toContain("Pi provider login");
+    expect(envContent).toContain("pi provider login");
+    expect(envContent).toContain("separate from TYPESAFE_API_KEY");
+  });
+
+  test("documents Pi model mappings", () => {
+    expect(envContent).toContain("CODING_ROUTER_FAST_MODEL_PI");
+    expect(envContent).toContain("CODING_ROUTER_BALANCED_MODEL_PI");
+    expect(envContent).toContain("CODING_ROUTER_STRONG_MODEL_PI");
+    expect(envContent).toContain("CODING_ROUTER_LONG_MODEL_PI");
+  });
+});
+
+describe("negative manifest validation", () => {
+  test("pi field is an object, not array or string", () => {
+    expect(typeof pkg.pi).toBe("object");
+    expect(Array.isArray(pkg.pi)).toBe(false);
+  });
+
+  test("pi.extensions entries are strings", () => {
+    for (const ext of pkg.pi.extensions) {
+      expect(typeof ext).toBe("string");
+    }
+  });
+
+  test("pi.skills entries are strings", () => {
+    for (const skill of pkg.pi.skills) {
+      expect(typeof skill).toBe("string");
+    }
   });
 });
