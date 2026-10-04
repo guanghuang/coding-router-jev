@@ -1,10 +1,12 @@
 # Coding Router Jev
 
-A TypeScript/Bun wrapper that routes Codex user turns through JEV. The `codex-jev` command wraps the Codex CLI.
+A TypeScript/Bun project that routes coding-agent user turns through JEV (the TypeSafe classifier). The `codex-jev` command wraps the Codex CLI; the Pi extension registers a `jev/auto` virtual model so Pi selects physical models and thinking levels automatically.
 
 ## Prerequisites
 
-All installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
+**Codex** — The `codex-jev` launcher requires the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
+
+**Pi** — The Pi extension requires `@earendil-works/pi-coding-agent` ≥ 1.0.2 and `@earendil-works/pi-ai` (declared as optional peer dependencies). Pi manages these packages; you do not install them manually. Node ≥ 22.19.0 is required by the Node package; Pi distributions that supply their own runtime do not require a separate Node installation.
 
 ## Distribution
 
@@ -258,6 +260,86 @@ Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; ma
 | Linux (ARM64) | glibc Linux | Cross-compiled in CI; not yet run on ARM64 hardware |
 | Windows (x64) | Windows 10+ x64 | Native x64 only; ARM64 not supported |
 
+## Install as a Pi package
+
+Pi manages extensions and packages natively. Installing this repository as a Pi package registers the `jev/auto` virtual model and delivers the Pi-specific `jev-logs` skill. No `bun link` is required.
+
+### From Git (private repository — requires authentication)
+
+While the repository is private, Pi needs authenticated Git access. Configure Git with your GitHub credentials (SSH key, credential helper, or `GH_TOKEN`), then install:
+
+```sh
+pi install git:github.com/guanghuang/coding-router-jev
+```
+
+Pi clones the repository, resolves dependencies through its supported mechanism, and registers the package. Do not include credential URLs in the install command. If using `GH_TOKEN`, avoid inline assignment (`GH_TOKEN=… pi install …`) — it exposes the token in process listings and shell history. Export the token first, then unset it after installation.
+
+For **local development**, install from an absolute path to your checkout:
+
+```sh
+# macOS / Linux
+pi install /absolute/path/to/coding-router-jev
+
+# Windows PowerShell — use a valid Windows path
+pi install C:\Users\you\coding-router-jev
+```
+
+Local dependencies must be installed with the repository's supported development workflow (`bun install`) before the local Pi install.
+
+### From Git (public repository — once public)
+
+After the repository is made public, install from a released tag:
+
+```sh
+pi install git:github.com/guanghuang/coding-router-jev@v0.1.0
+```
+
+Replace `v0.1.0` with the desired release tag. Omitting the tag tracks the default branch, which may introduce unexpected changes on reinstall — prefer pinning a tag for reproducible installs.
+
+### Select the virtual model
+
+After installation, select `jev/auto` to enable automatic JEV routing:
+
+```sh
+pi --model jev/auto
+```
+
+### What gets installed
+
+| Resource | Path | Description |
+| --- | --- | --- |
+| Extension | `./src/pi-extension.ts` | Registers `jev/auto` virtual model with Pi |
+| Skill | `./skills/pi/jev-logs` | Pi-specific `jev-logs` session log query skill |
+
+The extension and skill are visible only when this package is enabled in Pi. The Codex `jev-logs` skill (`skills/jev-logs/SKILL.md`) is not installed globally by Pi; it is managed by the Codex launcher's own skill-install mechanism.
+
+### Pi provider login
+
+Pi authenticates against the model provider separately from the TypeSafe classifier key:
+
+1. **Provider login** — run `pi provider login openai-codex` to authenticate with your OpenAI Codex subscription. This grants Pi access to the inference models (`gpt-6-luna`, `gpt-6.1-sol`, etc.).
+2. **TypeSafe API key** — set `TYPESAFE_API_KEY` in your environment or `~/.coding-router-jev.env`. This key is read directly by the TypeSafe SDK for JEV classification requests. It is not passed to Pi or the provider.
+
+Both credentials are required for full Pi routing. Without the provider credential, model requests fail at the provider. Without the TypeSafe key, JEV classification is unavailable and the adapter falls back to the current or startup model without reclassifying.
+
+Supported catalog models and provider names must match those verified against Pi 1.0.2. Use `pi model list` to see available models after provider login.
+
+### Disable or remove
+
+To disable JEV routing without uninstalling, select a physical model directly:
+
+```sh
+pi --model openai-codex/gpt-6.1-sol
+```
+
+To remove the package entirely:
+
+```sh
+pi remove coding-router-jev
+```
+
+The Codex `codex-jev` launcher and its installation remain functional regardless of Pi package state.
+
 ## Run (release install)
 
 After installing a release binary, use `codex-jev` like the Codex CLI:
@@ -331,7 +413,13 @@ The compiled launcher still requires the separately installed and authenticated 
 
 ## How it works
 
+### Codex
+
 Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and starts ordinary Codex. With the key, it starts a proxy on `127.0.0.1` at an OS-assigned port, launches Codex with temporary provider settings, and stops the proxy when Codex exits. It passes `--no-daemon` to prevent another Codex session's shared daemon from reusing the wrong provider configuration. No permanent Codex configuration is edited. TypeSafe credentials are not passed to the Codex child process.
+
+### Pi
+
+The Pi extension (`src/pi-extension.ts`) registers a `jev/auto` virtual model with Pi's coding agent. When a user selects `jev/auto`, Pi delegates model resolution to the adapter, which calls the TypeSafe JEV classifier and returns a physical provider/model pair with a thinking level. Pi then uses that physical model for inference. The adapter runs in-process within Pi — no separate proxy or child process is involved.
 
 ## Configuration
 
@@ -369,7 +457,40 @@ The shared routing configuration includes model mappings for Pi extensions. Pi u
 | `CODING_ROUTER_STRONG_MODEL_PI` | `openai-codex/gpt-6.1-sol` |
 | `CODING_ROUTER_LONG_MODEL_PI` | `openai-codex/gpt-6-astra` |
 
-Shared settings — confidence threshold, recent context, feedback format, log retention, Long model enable — apply to both Codex and Pi. The Pi adapter (issue #25) consumes these mappings; this ticket prepares the configuration without registering Pi models or implementing Pi-specific authentication.
+Shared settings — confidence threshold, recent context, feedback format, log retention, Long model enable — apply to both Codex and Pi. The Pi adapter consumes these mappings through `configFromEnv()` and resolves physical models from Pi's model registry at runtime.
+
+#### Thinking-level normalization
+
+Pi models support a subset of thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The JEV classifier selects a reasoning effort string; the Pi adapter maps it to a supported thinking level using `clampThinkingLevel(model, level)` from `@earendil-works/pi-ai`. Clamping searches upward first, then downward. Non-reasoning models support `off` only.
+
+JEV picks Pi-supported levels and Pi maps them to provider reasoning settings. There is no blanket equivalence to Codex effort strings — Codex preserves its own effort fallback and virtual-model context behavior, while Pi uses physical-model metadata and native thinking-level clamping.
+
+#### Startup, resume, and session lifecycle
+
+- **Fresh start**: The adapter initializes at the configured startup tier (default Fast). JEV routes the first actual user message normally and may select a different tier.
+- **Resume**: Pi's native state restore delivers the saved `AdapterState` (tier, provider, model, effective effort, version). The adapter validates the saved state against the current registry and reconciles with the physical model Pi reports as active. Invalid or unknown state versions fall back to startup defaults.
+- **Fork / tree navigation**: Separate restore calls produce independent state. The adapter does not carry over state across forks.
+- **Compaction**: Pi compaction replaces earlier conversation anchors. The adapter treats a compacted restore identically to a normal resume — saved state is authoritative.
+
+#### Feedback and notices
+
+- One routing notice per user intent, using the configurable `CODING_ROUTER_FEEDBACK_FORMAT`.
+- Continuation, retry, and direct calls (sticky tool calls, retries) do not trigger feedback.
+- Feedback is not stored in Pi's assistant history.
+
+#### jev-logs skill delivery
+
+When this package is enabled in Pi, the `jev-logs` skill (`skills/pi/jev-logs/SKILL.md`) is visible. The skill queries only the active session's JSONL log through a `jev_logs` tool registered by the extension. Ordinary Codex never acquires this skill through Pi installation — Codex has its own `jev-logs` skill managed by the Codex launcher's skill-install mechanism.
+
+#### Advertised capacity and routing contracts
+
+JEV evaluates candidate models for capacity eligibility based on context window metadata from the Pi registry. Advertised API capacity does not imply the client or backend uses that full capacity. The adapter handles:
+
+- **Known-capacity rejection**: Candidates whose context window is smaller than the estimated context tokens (plus a 16K output reservation) are excluded before classification.
+- **Unknown capacity**: Candidates without context window metadata are included as unknown and eligible for routing.
+- **No silent truncation**: The adapter does not truncate context to fit a smaller model. If all candidates are rejected by capacity, the current model is retained with a `capacity/no-eligible` decision.
+
+Codex preserves its existing effort fallback and virtual-model context behavior. The routing policy (tier selection, confidence thresholds, override detection) is shared between Codex and Pi; only the effort mapping and state persistence differ.
 
 ## Feedback format
 
@@ -547,6 +668,7 @@ Tests use local fake JEV/provider endpoints to cover routing, SDK configuration,
 - Linux ARM64 on physical hardware (CI cross-compiles only).
 - Interactive multi-turn routing sessions on all platforms (verified locally on macOS only).
 - ChatGPT desktop or Work integration (not implemented; not advertised).
+- Pi git/local installation end-to-end on macOS, Linux, and Windows (package manifest and resource discovery are validated in unit tests; platform-specific Pi runtime installation is documented but not automated in CI).
 
 ## Troubleshooting
 
@@ -635,6 +757,37 @@ SmartScreen may show "Windows protected your PC" on first run. Click **More info
 ### Routing history log location
 
 Session logs are written to `${TMPDIR:-/tmp}/coding-router-jev/` on macOS/Linux. On Windows, the equivalent `%TEMP%` directory is used. Logs contain user prompts — treat them as confidential.
+
+### Pi: "No valid Pi models configured"
+
+The adapter could not find any configured model in Pi's registry. Check that:
+1. Provider login succeeded: `pi provider login openai-codex`
+2. `_MODEL_PI` environment variables (or defaults) match models available in Pi: `pi model list`
+3. `TYPESAFE_API_KEY` is set for JEV classification
+
+### Pi: "does not support virtual models"
+
+Pi version is below 1.0.2. Virtual models were introduced as experimental in 0.99.0 and stabilized in 1.0.2. Upgrade to `@earendil-works/pi-coding-agent` ≥ 1.0.2.
+
+### Pi: "already registered"
+
+Another extension has already registered the `jev/auto` virtual model. Only one extension can claim a given virtual model ID. Check installed Pi packages for conflicts.
+
+### Pi: jev-logs skill not visible
+
+The `jev-logs` skill is delivered by this package and is visible only when the package is enabled. Run `pi package list` to confirm the package is installed and active. The Codex `jev-logs` skill is a separate file managed by the Codex launcher.
+
+## Compatibility
+
+| Platform | Codex (codex-jev) | Pi (jev/auto) | Notes |
+| --- | --- | --- | --- |
+| macOS (ARM64) | Binary + source | Git/local install | Codex tested end-to-end; Pi manifest validated in unit tests |
+| macOS (x64) | Binary + source | Git/local install | Codex tested end-to-end; Pi manifest validated in unit tests |
+| Linux (x64) | Binary + source | Git/local install | Codex tested on Ubuntu; Pi manifest validated in unit tests; glibc required |
+| Linux (ARM64) | Binary (cross-compiled) | Git/local install | Not yet tested on ARM64 hardware |
+| Windows (x64) | Binary + source | Git/local install | PowerShell paths; ARM64 not supported |
+
+Pi support requires `@earendil-works/pi-coding-agent` ≥ 1.0.2. Pi runtime installation and resource discovery are documented but not automated in CI; platform-specific smoke tests should be run manually. Claude adapter support is future work and does not ship with this release.
 
 ## Attribution
 
