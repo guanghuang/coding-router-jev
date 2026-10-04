@@ -14,6 +14,7 @@ export type Config = {
   longModelEnabled: boolean;
   minConfidence: number;
   sendRecentContext: boolean;
+  feedbackFormat: string | undefined;
 };
 
 export function parseEnvFile(text: string): Record<string, string> {
@@ -49,5 +50,6 @@ export function configFromEnv(environment: Record<string, string | undefined> = 
     longModelEnabled: value("CODING_ROUTER_LONG_MODEL_ENABLE", "false") === "true",
     minConfidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.30,
     sendRecentContext: value("CODING_ROUTER_SEND_RECENT_CONTEXT", "true") === "true",
+    feedbackFormat: environment["CODING_ROUTER_FEEDBACK_FORMAT"]?.trim() || undefined,
   };
 }

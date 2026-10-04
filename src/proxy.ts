@@ -5,6 +5,7 @@ import { applyEffort, type EffortState } from "./effort";
 import { sessionHistory } from "./history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult } from "./router";
+import { formatFeedback, type FeedbackValues } from "./feedback";
 import { observeStream, type Usage } from "./stream";
 import { TIERS, type Candidate, type CodexBody, type Tier } from "./types";
 
@@ -102,7 +103,14 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         state.lastTurn = turnKey;
         const id = randomUUID();
         noticeKey = `${key}:${turnKey}`;
-        notice = `[Jev] tier: ${selected.tier}, model: ${selected.id}, effort: ${effort ?? "default"}; decision: ${decisionLabel(decision.reason)}, confidence: ${confidence === null ? "unavailable" : confidence.toFixed(2)}.`;
+        const jevUsage = result.response?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+        const feedbackValues: FeedbackValues = {
+          tier: selected.tier, model: selected.id, effort, decision: decisionLabel(decision.reason), confidence,
+          previous_model: currentModel, cache_read: last?.read ?? null, cache_write: last?.created ?? null,
+          jev_tokens_input: typeof jevUsage?.input_tokens === "number" ? jevUsage.input_tokens : undefined,
+          jev_tokens_output: typeof jevUsage?.output_tokens === "number" ? jevUsage.output_tokens : undefined,
+        };
+        notice = formatFeedback(config.feedbackFormat, feedbackValues);
         options.onNotice?.(notice);
         state.notice = notice;
         state.noticeKey = noticeKey;

@@ -16,6 +16,7 @@ describe("configuration", () => {
       longModelEnabled: false,
       minConfidence: 0.3,
       sendRecentContext: true,
+      feedbackFormat: undefined,
     });
   });
 

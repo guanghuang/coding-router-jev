@@ -42,8 +42,41 @@ Precedence is process environment, then `~/.coding-router-jev.env`, then built-i
 | `CODING_ROUTER_LONG_MODEL_ENABLE` | `false` |
 | `CODING_ROUTER_MIN_CONFIDENCE` | `0.30`; valid range `0`–`1`, invalid values fall back |
 | `CODING_ROUTER_SEND_RECENT_CONTEXT` | `true` |
+| `CODING_ROUTER_FEEDBACK_FORMAT` | See [Feedback format](#feedback-format) below; unset uses the built-in notice |
 
 Configured model choices take priority over catalog detection. The catalog enriches descriptions and effort capabilities. The requested `chatgpt-6*` default names resolve to `gpt-6*` when that corresponding ID appears in the Codex catalog; otherwise the configured ID is sent unchanged. Set an exact provider model ID if your account does not advertise that alias. Account model availability is ultimately enforced by the provider.
+
+## Feedback format
+
+The proxy inserts a `[Jev]` routing notice into each response stream. Set `CODING_ROUTER_FEEDBACK_FORMAT` to customize it. When the variable is unset, the default format is:
+
+```
+[Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.
+```
+
+### Supported placeholders
+
+| Placeholder | Description | Missing-value rendering |
+| --- | --- | --- |
+| `{tier}` | Selected tier (fast, balanced, strong, long) | Always present |
+| `{model}` | Selected model ID | Always present |
+| `{effort}` | Reasoning effort level | `default` |
+| `{decision}` | Routing decision label (e.g. JEV, override) | Always present |
+| `{confidence}` | Decision confidence (0.00–1.00) | `unavailable` |
+| `{previous_model}` | Model before this routing decision (configured baseline on first turn, not an observed prior model) | Always present |
+| `{cache_read}` | Cache-read tokens from last provider response | `unavailable` |
+| `{cache_write}` | Cache-write tokens from last provider response | `unavailable` |
+| `{jev_tokens_input}` | JEV request input tokens | `unavailable` |
+| `{jev_tokens_output}` | JEV request output tokens | `unavailable` |
+| `{jev_tokens}` | JEV total tokens (computed only when both input and output are reported) | `unavailable` |
+
+Unknown placeholders are left as-is in the output. Token counts are never fabricated; only values actually reported by the SDK/API are shown. On the first turn, `{previous_model}` reflects the router's configured starting model, not an observed prior model.
+
+**Example:**
+
+```dotenv
+CODING_ROUTER_FEEDBACK_FORMAT=[Jev] {tier} · {model} · effort:{effort} · {decision} · confidence:{confidence}
+```
 
 ## Routing
 
