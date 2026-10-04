@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile, mkdir, readdir, stat, chmod } from "node:fs/promises";
+import { utimesSync } from "node:fs";
+import { mkdtemp, rm, writeFile, mkdir, readdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupStaleLogs } from "../src/history.ts";
+import { cleanupStaleLogs } from "../src/history";
 
 async function createFile(dir: string, name: string, ageMs: number): Promise<string> {
   const path = join(dir, name);
   await writeFile(path, "test\n");
   const past = new Date(Date.now() - ageMs);
-  const { utimesSync } = await import("node:fs");
   utimesSync(path, past, past);
   return path;
 }
@@ -41,6 +41,22 @@ describe("cleanupStaleLogs", () => {
 
       const remaining = await readdir(dir);
       expect(remaining.sort()).toEqual(["codex-a.jsonl", "codex-b.jsonl"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("file at exact cutoff boundary is not deleted", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-cleanup-test-"));
+    try {
+      await createFile(dir, "codex-boundary.jsonl", 5 * DAY_MS);
+      await createFile(dir, "codex-older.jsonl", 5 * DAY_MS + 1);
+
+      cleanupStaleLogs(dir, 5);
+
+      const remaining = await readdir(dir);
+      expect(remaining).toContain("codex-boundary.jsonl");
+      expect(remaining).not.toContain("codex-older.jsonl");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -98,6 +114,22 @@ describe("cleanupStaleLogs", () => {
       expect(remaining).toContain("codex-b.jsonl");
     } finally {
       await chmod(dir, 0o700).catch(() => {});
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("skips cleanup for non-positive or invalid retentionDays", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-cleanup-test-"));
+    try {
+      await createFile(dir, "codex-old.jsonl", 100 * DAY_MS);
+
+      cleanupStaleLogs(dir, 0);
+      cleanupStaleLogs(dir, -5);
+      cleanupStaleLogs(dir, NaN);
+
+      const remaining = await readdir(dir);
+      expect(remaining).toEqual(["codex-old.jsonl"]);
+    } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
