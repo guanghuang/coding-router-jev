@@ -2,9 +2,13 @@
 
 import { configFromEnv, loadEnv } from "./config";
 import { claudeArgs, startClaudeProxy } from "./claude-proxy";
+import { generateClaudePlugin, resolveJevLogsPath, addPluginDirArg } from "./claude-skill";
+import { buildStatusLine } from "./claude-status";
+import { dirname } from "node:path";
 
 const args = process.argv.slice(2);
 let proxy: ReturnType<typeof startClaudeProxy> | undefined;
+let pluginCleanup: (() => void) | undefined;
 
 try {
   await loadEnv();
@@ -13,9 +17,29 @@ try {
   let logPath: string | undefined;
 
   if (hasKey) {
-    proxy = startClaudeProxy(configFromEnv());
+    const config = configFromEnv();
+    proxy = startClaudeProxy(config, {
+      onNotice(notice) {
+        // Status notices are available for session-local display
+      },
+    });
     childArgs = claudeArgs(args, process.env);
     logPath = proxy.logPath;
+
+    // Generate session-local plugin for jev-logs skill
+    const jevLogsPath = resolveJevLogsPath(dirname(dirname(import.meta.path)));
+    if (logPath) {
+      const plugin = generateClaudePlugin({
+        jevLogsPath,
+        sessionLogPath: logPath,
+        env: process.env,
+      });
+
+      if (!plugin.skipped) {
+        childArgs = addPluginDirArg(childArgs, plugin.pluginDir);
+        pluginCleanup = plugin.cleanup;
+      }
+    }
   } else {
     console.error("[Jev] TYPESAFE_API_KEY is not set; starting Claude without routing.");
   }
@@ -50,5 +74,6 @@ try {
   if (error instanceof Error) console.error(error.message);
   process.exitCode = 1;
 } finally {
+  pluginCleanup?.();
   proxy?.close();
 }
