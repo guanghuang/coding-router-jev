@@ -2,13 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { configFromEnv, type Config } from "../src/config";
 import {
   createPiAdapter,
-  piCandidatesFor,
   validateSavedState,
   reconcileState,
   type PiModelRegistry,
   type PiClamp,
   type PiModelInfo,
-  type PiRequest,
   type PiThinkingLevel,
   type AdapterResult,
   type AdapterState,
@@ -262,13 +260,31 @@ describe("session fresh start", () => {
 
 describe("session resume with saved state", () => {
   test("valid resumed state restores actual prior model/effort and tier", async () => {
-    const adapter = makeAdapter({ tier: "fast", effort: "medium", confidence: 0.9 });
+    let capturedInput: any;
+    const route = async (input: unknown) => {
+      capturedInput = input;
+      return {
+        request: {} as any,
+        response: {
+          answers: {
+            model: { type: "choice", choice: "fast", confidence: 0.9, probabilities: {} },
+            reasoning_effort: { type: "choice", choice: "medium", confidence: 0.9, probabilities: {} },
+          },
+          usage: { input_tokens: 10, output_tokens: 5 },
+        } as any,
+        ms: 5,
+      };
+    };
+    const adapter = makeAdapter({ route });
     const result = await adapter.resolveModel({
       reason: "user",
       text: "continue working",
       state: savedState({ tier: "strong", effectiveEffort: "high" }),
       previous: { provider: "openai-codex", modelId: "gpt-6.1-sol", thinkingLevel: "high" },
     });
+    expect(capturedInput.currentTier).toBe("strong");
+    expect(capturedInput.currentModel).toBe("openai-codex/gpt-6.1-sol");
+    expect(capturedInput.currentEffort).toBe("high");
     expect(result.state.version).toBeGreaterThan(1);
   });
 
@@ -326,14 +342,33 @@ describe("failed first request", () => {
 
 describe("failed switch Luna→Sol", () => {
   test("last successful Luna is used when saved Sol switch failed", async () => {
-    const adapter = makeAdapter();
+    let capturedInput: any;
+    const route = async (input: unknown) => {
+      capturedInput = input;
+      return {
+        request: {} as any,
+        response: {
+          answers: {
+            model: { type: "choice", choice: "fast", confidence: 0.9, probabilities: {} },
+            reasoning_effort: { type: "choice", choice: "medium", confidence: 0.9, probabilities: {} },
+          },
+          usage: { input_tokens: 10, output_tokens: 5 },
+        } as any,
+        ms: 5,
+      };
+    };
+    const adapter = makeAdapter({ route });
     const result = await adapter.resolveModel({
       reason: "user",
       text: "continue after failed switch",
       state: savedState({ tier: "strong", provider: "openai-codex", modelId: "gpt-6.1-sol", effectiveEffort: "high" }),
       previous: { provider: "openai-codex", modelId: "gpt-6-luna", thinkingLevel: "medium" },
     });
+    expect(capturedInput.currentModel).toBe("openai-codex/gpt-6-luna");
+    expect(capturedInput.currentTier).toBe("fast");
+    expect(capturedInput.currentEffort).toBe("medium");
     expect(adapter.state!.provider).toBe("openai-codex");
+    expect(adapter.state!.modelId).toBe("gpt-6-luna");
   });
 });
 
@@ -512,5 +547,47 @@ describe("compaction preserves state", () => {
     });
     expect(r2.tier).toBe("strong");
     expect(r2.thinkingLevel).toBe("xhigh");
+  });
+});
+
+describe("invalid state on warm adapter clears stale state", () => {
+  test("continuation with invalid state after prior resolve uses startup fallback", async () => {
+    const adapter = makeAdapter({ tier: "strong", effort: "high", confidence: 0.9 });
+    await adapter.resolveModel({ reason: "user", text: "establish strong state" });
+    expect(adapter.state?.tier).toBe("strong");
+
+    const result = await adapter.resolveModel({
+      reason: "continuation",
+      state: { tier: "strong", provider: "openai-codex", modelId: "gpt-6.1-sol", effectiveEffort: "high", version: 99 } as AdapterState,
+      previous: { provider: "openai-codex", modelId: "gpt-6.1-sol", thinkingLevel: "high" },
+    });
+    expect(result.provider).toBe("openai-codex");
+    expect(result.modelId).toBe("gpt-6.1-sol");
+    expect(result.thinkingLevel).toBe("high");
+    expect(result.tier).toBe("fast");
+  });
+
+  test("user resolve with invalid state after prior resolve falls back to startup", async () => {
+    const adapter = makeAdapter({ tier: "fast", effort: "medium", confidence: 0.9 });
+    await adapter.resolveModel({ reason: "user", text: "establish state" });
+
+    const result = await adapter.resolveModel({
+      reason: "user",
+      text: "test with invalid state",
+      state: { tier: "strong", provider: "removed", modelId: "gone", effectiveEffort: "high", version: 1 } as AdapterState,
+    });
+    expect(result.state.tier).toBe("fast");
+  });
+});
+
+describe("validateSavedState edge cases", () => {
+  const registry = fakeRegistry(DEFAULT_MODELS);
+
+  test("rejects empty-string provider", () => {
+    expect(validateSavedState({ ...savedState(), provider: "" }, registry)).toBeNull();
+  });
+
+  test("rejects empty-string modelId", () => {
+    expect(validateSavedState({ ...savedState(), modelId: "" }, registry)).toBeNull();
   });
 });

@@ -146,7 +146,7 @@ export function validateSavedState(
   if (!saved || typeof saved !== "object") return null;
   const s = saved as Record<string, unknown>;
   if (s.version !== 1) return null;
-  if (typeof s.provider !== "string" || typeof s.modelId !== "string") return null;
+  if (typeof s.provider !== "string" || !s.provider || typeof s.modelId !== "string" || !s.modelId) return null;
   if (typeof s.tier !== "string" || !TIERS.includes(s.tier as Tier)) return null;
   if (typeof s.effectiveEffort !== "string" || !PI_THINKING_LEVELS.includes(s.effectiveEffort as PiThinkingLevel)) return null;
 
@@ -196,11 +196,7 @@ export function reconcileState(
   const supported = clamp.getSupportedThinkingLevels({ provider: previous.provider, modelId: previous.modelId });
   const effort = level && supported.includes(level)
     ? clamp.clampThinkingLevel({ provider: previous.provider, modelId: previous.modelId }, level)
-    : ((): PiThinkingLevel => {
-        const fallbackCandidate = matchingCandidate;
-        const ref = { provider: previous.provider, modelId: previous.modelId };
-        return resolveEffort(undefined, fallbackCandidate, undefined, clamp, ref);
-      })();
+    : resolveEffort(undefined, matchingCandidate, undefined, clamp, { provider: previous.provider, modelId: previous.modelId });
 
   return {
     tier: matchingCandidate.tier,
@@ -242,7 +238,10 @@ export function createPiAdapter(options: CreateAdapterOptions) {
   function restoreFromRequest(request: PiRequest): void {
     if (!request.state) return;
     const validated = validateSavedState(request.state, registry);
-    if (!validated) return;
+    if (!validated) {
+      state = undefined;
+      return;
+    }
     state = reconcileState(validated, request.previous, config, registry, clamp);
   }
 
