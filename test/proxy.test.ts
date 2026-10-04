@@ -85,6 +85,31 @@ test("disabled recent context is omitted and a failed JEV call keeps the current
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("custom feedback format with usage placeholders flows through proxy", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-feedback-"));
+  const notices: string[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    return new Response(`event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { model: body.model, usage: { input_tokens_details: { cached_tokens: 42, cache_write_tokens: 7 } } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const config = configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "[Jev] {tier} · {model} · {effort} · {decision} · {confidence} · prev:{previous_model} · jev:{jev_tokens}" });
+  const route: Route = async input => result(input, "strong", "high");
+  const proxy = startProxy(config, { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory, onNotice: notice => notices.push(notice) });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/models`).then(r => r.json());
+    await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "hello" }] }) }).then(r => r.text());
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("[Jev] strong ·");
+    expect(notices[0]).toContain("· prev:gpt-6.1-sol");
+    expect(notices[0]).toContain("· jev:2");
+    expect(notices[0]).not.toContain("{tier}");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
 test.each([true, false])("a provider retry reuses the JEV decision and displays one notice (SSE header: %s)", async (hasSSEHeader) => {
   const directory = await mkdtemp(join(tmpdir(), "codex-jev-retry-"));
   let upstreamCalls = 0;

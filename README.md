@@ -109,7 +109,7 @@ The three score questions (`task_complexity`, `reasoning_required`, `tool_comple
 - Below the configured confidence threshold, downgrades are refused and upgrades above Balanced are capped at Balanced (or retained if unavailable).
 - There is **no local cache downgrade guard**. JEV receives the observations to weigh cache reuse.
 - Unsupported or low-confidence effort choices keep a compatible current effort or use the model's default.
-- Tool continuations and duplicate requests reuse the selected tier and effort. The proxy adds `[Jev] tier: TIER, model: MODEL, effort: EFFORT; decision: REASON, confidence: VALUE.` to the response stream as assistant commentary; concurrent requests for a turn produce one decision and one notice.
+- Tool continuations and duplicate requests reuse the selected tier and effort. The proxy adds a configurable routing notice (see [Feedback format](#feedback-format)) to the response stream as assistant commentary; concurrent requests for a turn produce one decision and one notice.
 
 ### Reasoning effort and cache reuse
 

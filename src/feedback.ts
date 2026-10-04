@@ -44,5 +44,5 @@ function renderValue(key: string, values: FeedbackValues): string {
 
 export function formatFeedback(format: string | undefined, values: FeedbackValues): string {
   const template = format ?? DEFAULT_FEEDBACK_FORMAT;
-  return template.replace(PLACEHOLDER_RE, (match, key: string) => renderValue(key, values));
+  return template.replace(PLACEHOLDER_RE, (_, key: string) => renderValue(key, values));
 }

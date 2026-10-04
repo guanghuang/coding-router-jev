@@ -74,6 +74,15 @@ describe("formatFeedback", () => {
     expect(result).toBe("0.00 0 0 0 0 0");
   });
 
+  test("repeated placeholders are all substituted", () => {
+    expect(formatFeedback("{tier}-{tier}", base)).toBe("balanced-balanced");
+  });
+
+  test("jev_tokens unavailable when only jev_tokens_input is missing", () => {
+    const values = { ...base, jev_tokens_input: undefined };
+    expect(formatFeedback("{jev_tokens}", values)).toBe("unavailable");
+  });
+
   test("DEFAULT_FEEDBACK_FORMAT constant matches the legacy format", () => {
     expect(DEFAULT_FEEDBACK_FORMAT).toBe(
       "[Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.",

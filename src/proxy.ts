@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "./config";
 import { conversationKey, hash, newTurn, recentContext } from "./context";
 import { applyEffort, type EffortState } from "./effort";
+import { formatFeedback, type FeedbackValues } from "./feedback";
 import { sessionHistory } from "./history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult } from "./router";
-import { formatFeedback, type FeedbackValues } from "./feedback";
 import { observeStream, type Usage } from "./stream";
 import { TIERS, type Candidate, type CodexBody, type Tier } from "./types";
 
@@ -107,8 +107,8 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         const feedbackValues: FeedbackValues = {
           tier: selected.tier, model: selected.id, effort, decision: decisionLabel(decision.reason), confidence,
           previous_model: currentModel, cache_read: last?.read ?? null, cache_write: last?.created ?? null,
-          jev_tokens_input: typeof jevUsage?.input_tokens === "number" ? jevUsage.input_tokens : undefined,
-          jev_tokens_output: typeof jevUsage?.output_tokens === "number" ? jevUsage.output_tokens : undefined,
+          jev_tokens_input: typeof jevUsage?.input_tokens === "number" && Number.isFinite(jevUsage.input_tokens) ? jevUsage.input_tokens : undefined,
+          jev_tokens_output: typeof jevUsage?.output_tokens === "number" && Number.isFinite(jevUsage.output_tokens) ? jevUsage.output_tokens : undefined,
         };
         notice = formatFeedback(config.feedbackFormat, feedbackValues);
         options.onNotice?.(notice);

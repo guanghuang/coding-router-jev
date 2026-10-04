@@ -44,6 +44,13 @@ describe("configuration", () => {
     }
   });
 
+  test("parses feedback format and normalizes empty/whitespace to undefined", () => {
+    expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "[Jev] {tier}" }).feedbackFormat).toBe("[Jev] {tier}");
+    expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "  " }).feedbackFormat).toBeUndefined();
+    expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "" }).feedbackFormat).toBeUndefined();
+    expect(configFromEnv({}).feedbackFormat).toBeUndefined();
+  });
+
   test("uses valid confidence override and falls back for invalid values", () => {
     expect(configFromEnv({ CODING_ROUTER_MIN_CONFIDENCE: "0.42" }).minConfidence).toBe(0.42);
     expect(configFromEnv({ CODING_ROUTER_MIN_CONFIDENCE: "2" }).minConfidence).toBe(0.3);
