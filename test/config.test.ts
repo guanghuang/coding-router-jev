@@ -13,6 +13,12 @@ describe("configuration", () => {
         strong: "chatgpt-6.1-sol",
         long: "chatgpt-6-astra",
       },
+      piModels: {
+        fast: "openai-codex/gpt-6-luna",
+        balanced: "openai-codex/gpt-6.1-sol",
+        strong: "openai-codex/gpt-6.1-sol",
+        long: "openai-codex/gpt-6-astra",
+      },
       startTier: "fast",
       longModelEnabled: false,
       minConfidence: 0.3,
@@ -134,6 +140,70 @@ describe("configuration", () => {
       await loadEnv(file, environment);
       expect(environment.CODING_ROUTER_START_TIER).toBe("balanced");
       expect(configFromEnv(environment).startTier).toBe("balanced");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Pi model defaults are provider-qualified", () => {
+    const config = configFromEnv({});
+    expect(config.piModels.fast).toBe("openai-codex/gpt-6-luna");
+    expect(config.piModels.balanced).toBe("openai-codex/gpt-6.1-sol");
+    expect(config.piModels.strong).toBe("openai-codex/gpt-6.1-sol");
+    expect(config.piModels.long).toBe("openai-codex/gpt-6-astra");
+  });
+
+  test("Pi model overrides from environment", () => {
+    const config = configFromEnv({
+      CODING_ROUTER_FAST_MODEL_PI: "custom-provider/custom-model",
+      CODING_ROUTER_STRONG_MODEL_PI: "other/model/with/slashes",
+    });
+    expect(config.piModels.fast).toBe("custom-provider/custom-model");
+    expect(config.piModels.balanced).toBe("openai-codex/gpt-6.1-sol");
+    expect(config.piModels.strong).toBe("other/model/with/slashes");
+    expect(config.piModels.long).toBe("openai-codex/gpt-6-astra");
+  });
+
+  test("Pi model IDs with embedded slashes are preserved without splitting", () => {
+    const config = configFromEnv({
+      CODING_ROUTER_FAST_MODEL_PI: "provider/org/model-v2/latest",
+    });
+    expect(config.piModels.fast).toBe("provider/org/model-v2/latest");
+  });
+
+  test("Pi and Codex models are independent", () => {
+    const config = configFromEnv({
+      CODING_ROUTER_FAST_MODEL_CODEX: "codex-custom",
+      CODING_ROUTER_FAST_MODEL_PI: "pi-custom",
+    });
+    expect(config.codexModels.fast).toBe("codex-custom");
+    expect(config.piModels.fast).toBe("pi-custom");
+  });
+
+  test("loadEnv with missing file does not throw (ENOENT handled)", async () => {
+    const environment: Record<string, string | undefined> = {};
+    await loadEnv("/nonexistent/path/to/file.env", environment);
+    expect(Object.keys(environment)).toHaveLength(0);
+  });
+
+  test("loadEnv with non-ENOENT error is rethrown", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "coding-router-jev-err-"));
+    try {
+      await expect(loadEnv(dir, {})).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Pi models load from env file when shell env unset", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "coding-router-jev-pi-file-"));
+    const file = join(dir, "settings.env");
+    const environment: Record<string, string | undefined> = {};
+    try {
+      await writeFile(file, "CODING_ROUTER_FAST_MODEL_PI=file-pi-model\n");
+      await loadEnv(file, environment);
+      expect(environment.CODING_ROUTER_FAST_MODEL_PI).toBe("file-pi-model");
+      expect(configFromEnv(environment).piModels.fast).toBe("file-pi-model");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

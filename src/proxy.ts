@@ -43,7 +43,8 @@ export function candidatesFor(config: Config, catalog: Map<string, CatalogModel>
     const id = catalog.has(configured) ? configured : catalog.has(canonical) ? canonical : configured;
     const model = catalog.get(id);
     const efforts = model?.supported_reasoning_levels?.map(level => level.effort) ?? (/^(?:gpt|chatgpt)-6/.test(id) ? ["low", "medium", "high"] : []);
-    return { tier, id, description: [model?.display_name ?? id, model?.description, model?.context_window && `${model.context_window} context tokens`].filter(Boolean).join("; "), efforts, defaultEffort: model?.default_reasoning_level ?? (efforts.includes("medium") ? "medium" : efforts[0]) };
+    const capacity = model?.context_window ? { contextWindow: model.context_window } : undefined;
+    return { tier, id, description: [model?.display_name ?? id, model?.description, model?.context_window && `${model.context_window} context tokens`].filter(Boolean).join("; "), efforts, defaultEffort: model?.default_reasoning_level ?? (efforts.includes("medium") ? "medium" : efforts[0]), capacity };
   });
 }
 export const codexArgs = (baseURL: string, args: string[]) => [
