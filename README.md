@@ -353,6 +353,7 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 | `CODING_ROUTER_SEND_RECENT_CONTEXT` | `true` |
 | `CODING_ROUTER_FEEDBACK_FORMAT` | See [Feedback format](#feedback-format) below; unset uses the built-in notice |
 | `CODING_ROUTER_LOG_RETENTION_DAYS` | Unset (no cleanup); positive number enables startup deletion of stale session logs older than this many days |
+| `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL` | `true`; set to `false` to skip automatic `jev-logs` skill installation |
 
 Configured model choices take priority over catalog detection. The catalog enriches descriptions and effort capabilities. The requested `chatgpt-6*` default names resolve to `gpt-6*` when that corresponding ID appears in the Codex catalog; otherwise the configured ID is sent unchanged. Set an exact provider model ID if your account does not advertise that alias. Account model availability is ultimately enforced by the provider.
 
@@ -446,6 +447,51 @@ Logs contain user prompts and routing payloads (including optional recent contex
 ### Log retention
 
 Set `CODING_ROUTER_LOG_RETENTION_DAYS` to a positive number in the process environment or `~/.coding-router-jev.env` to enable startup cleanup. When the launcher starts, session JSONL files in the log directory whose modification time is older than the configured number of days are deleted. Only files matching the router's own `codex-*.jsonl` naming convention are considered; unrelated files and directories are never touched. If the setting is missing, blank, invalid, zero, or negative, no logs are deleted. Cleanup runs once at startup; there is no background timer. If an individual stale file cannot be removed, the error is logged and the launcher continues normally.
+
+## Active session log queries (jev-logs skill)
+
+The `jev-logs` Codex skill lets you ask questions about the current routing session. On startup, the launcher installs the skill at `$CODEX_HOME/skills/jev-logs/SKILL.md` (default: `~/.codex/skills/jev-logs/SKILL.md`) and sets `JEV_SESSION_LOG` so queries search only the active session.
+
+### Example queries
+
+| User request | What happens |
+| --- | --- |
+| "Show the last log" | One concise routing summary |
+| "Show the last 3 decisions" | Three timestamped summaries |
+| "Which model was used for the last turn?" | Model and tier from the last entry |
+| "Show decisions where the tier was fast" | Filtered by tier |
+| "Show all routing errors today" | Filtered by date and error presence |
+
+### Standalone CLI
+
+The `jev-logs` binary can also be used directly:
+
+```sh
+jev-logs "$JEV_SESSION_LOG" --last 5
+jev-logs "$JEV_SESSION_LOG" --filter-tier fast --last 10
+jev-logs "$JEV_SESSION_LOG" --filter-model gpt-6-luna
+jev-logs "$JEV_SESSION_LOG" --filter-keyword "debug" --detail
+jev-logs "$JEV_SESSION_LOG" --filter-date 2026-10-04
+```
+
+Default output is a concise human-readable summary with prompt preview, tier, model, effort, decision, confidence, and usage. Use `--detail` for full prompt text and JEV latency. Raw JSON is never shown by default.
+
+### Skill installation
+
+| Behavior | Details |
+| --- | --- |
+| Install location | `$CODEX_HOME/skills/jev-logs/SKILL.md`; falls back to `~/.codex/skills/jev-logs/SKILL.md` |
+| Automatic update | Updates the file when the bundled content changes; skips if the file was edited by the user (no `<!-- managed by coding-router-jev -->` header) |
+| Opt-out | Set `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL=false` in the environment or `~/.coding-router-jev.env` |
+| Privacy | Queries only the active session; never scans other session files; never shows API keys or authorization headers |
+
+### Compiled installation
+
+The release build compiles `jev-logs` as a standalone binary alongside `codex-jev`. No Bun or Python required at runtime.
+
+```sh
+bun run build   # produces dist/codex-jev and dist/jev-logs
+```
 
 ## Resume
 
