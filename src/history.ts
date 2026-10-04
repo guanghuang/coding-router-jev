@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 
 export const DEFAULT_LOG_DIR = join(tmpdir(), "coding-router-jev");
 
-export type AgentPrefix = "codex" | "pi";
-const SUPPORTED_PREFIXES: ReadonlySet<AgentPrefix> = new Set<AgentPrefix>(["codex", "pi"]);
+export type AgentPrefix = "codex" | "pi" | "claude";
+const SUPPORTED_PREFIXES: ReadonlySet<AgentPrefix> = new Set<AgentPrefix>(["codex", "pi", "claude"]);
 
 const AGENT_LOG_PATTERNS: Record<AgentPrefix, RegExp> = {
   codex: /^codex-.+\.jsonl$/,
   pi: /^pi-.+\.jsonl$/,
+  claude: /^claude-.+\.jsonl$/,
 };
 
 export function cleanupStaleLogs(directory: string, retentionDays: number, agent: AgentPrefix = "codex"): void {

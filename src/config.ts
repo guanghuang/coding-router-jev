@@ -11,6 +11,7 @@ export type ModelMap = Record<Tier, string>;
 export type Config = {
   codexModels: ModelMap;
   piModels: ModelMap;
+  claudeModels: ModelMap;
   startTier: Tier;
   longModelEnabled: boolean;
   minConfidence: number;
@@ -55,6 +56,12 @@ export function configFromEnv(environment: Record<string, string | undefined> = 
       balanced: value("CODING_ROUTER_BALANCED_MODEL_PI", "openai-codex/gpt-6.1-sol"),
       strong: value("CODING_ROUTER_STRONG_MODEL_PI", "openai-codex/gpt-6.1-sol"),
       long: value("CODING_ROUTER_LONG_MODEL_PI", "openai-codex/gpt-6-astra"),
+    },
+    claudeModels: {
+      fast: value("CODING_ROUTER_FAST_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
+      balanced: value("CODING_ROUTER_BALANCED_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
+      strong: value("CODING_ROUTER_STRONG_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
+      long: value("CODING_ROUTER_LONG_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
     },
     startTier: parseStartTier(value("CODING_ROUTER_START_TIER", ""), longModelEnabled),
     longModelEnabled,
