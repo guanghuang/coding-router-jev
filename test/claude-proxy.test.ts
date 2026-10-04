@@ -575,29 +575,31 @@ test("Haiku bypass strips incompatible effort from output_config", async () => {
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("Claude override alias 'use sonnet' triggers override decision", async () => {
+test("Claude override alias 'use sonnet' overrides JEV tier to balanced", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-alias-"));
-  const inputs: RoutingInput[] = [];
+  const captured: ClaudeBody[] = [];
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
-    const body = await req.json() as ClaudeBody;
-    return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
+    captured.push(await req.json() as ClaudeBody);
+    return new Response(anthropicStream(captured.at(-1)!.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
   const config = configFromEnv({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
     CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-sonnet-5-5",
     CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-5-5",
   });
-  const captured: ClaudeBody[] = [];
+  const inputs: RoutingInput[] = [];
+  // JEV returns "fast" but override should win
   const route: Route = async input => { inputs.push(input); return result(input, "fast"); };
   const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
   try {
-    const response = await fetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+    await (await fetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": "fake-key", "anthropic-version": "2023-06-01" },
       body: JSON.stringify({ model: CLAUDE_SENTINEL, messages: [{ role: "user", content: "use sonnet to fix this" }], max_tokens: 1024, stream: true } as ClaudeBody),
-    });
-    await response.text();
+    })).text();
     expect(inputs).toHaveLength(1);
+    // Override "use sonnet" → balanced tier → claude-sonnet-5-5 upstream
+    expect(captured[0].model).toBe("claude-sonnet-5-5");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -637,5 +639,86 @@ test("currentEffort propagates previous turn's effective effort", async () => {
     ])).text();
     expect(inputs).toHaveLength(2);
     expect(inputs[1].currentEffort).toBe("high");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("low-confidence JEV effort is ignored and prior effort preserved", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-low-conf-"));
+  const captured: Record<string, unknown>[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as Record<string, unknown>);
+    return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
+    CODING_ROUTER_MIN_CONFIDENCE: "0.5",
+  });
+  let callCount = 0;
+  const route: Route = async input => {
+    callCount++;
+    return {
+      request: buildRequest(input), ms: 1,
+      response: {
+        model: "fake-jev", usage: { input_tokens: 1, output_tokens: 1 },
+        answers: {
+          model: { type: "choice" as const, choice: "fast", confidence: 0.9, probabilities: {} },
+          // First call: confident high effort; second call: low-confidence max effort
+          reasoning_effort: callCount === 1
+            ? { type: "choice" as const, choice: "high", confidence: 0.9, probabilities: {} }
+            : { type: "choice" as const, choice: "max", confidence: 0.1, probabilities: {} },
+        },
+      },
+    };
+  };
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    // First turn: confident "high" effort applied
+    await (await send(proxy.port, [{ role: "user", content: "first" }])).text();
+    expect((captured[0].output_config as Record<string, unknown>)?.effort).toBe("high");
+
+    // Second turn: low-confidence "max" → ignored; prior "high" preserved
+    await (await send(proxy.port, [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "second" },
+    ])).text();
+    expect((captured[1].output_config as Record<string, unknown>)?.effort).toBe("high");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("same-turn continuation re-applies effort from state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-continuation-"));
+  const captured: Record<string, unknown>[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as Record<string, unknown>);
+    return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
+  });
+  const route: Route = async input => ({
+    request: buildRequest(input), ms: 1,
+    response: {
+      model: "fake-jev", usage: { input_tokens: 1, output_tokens: 1 },
+      answers: {
+        model: { type: "choice" as const, choice: "fast", confidence: 0.9, probabilities: {} },
+        reasoning_effort: { type: "choice" as const, choice: "high", confidence: 0.9, probabilities: {} },
+      },
+    },
+  });
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    // First request: routes and sets effort "high"
+    await (await send(proxy.port, [{ role: "user", content: "implement this" }])).text();
+    expect((captured[0].output_config as Record<string, unknown>)?.effort).toBe("high");
+
+    // Tool continuation (same turn): should re-apply effort
+    await (await send(proxy.port, [
+      { role: "user", content: "implement this" },
+      { role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: "read_file", input: { path: "x" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "file contents" }] },
+    ])).text();
+    // Effort should be re-applied from state.lastEffort
+    expect((captured[1].output_config as Record<string, unknown>)?.effort).toBe("high");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });

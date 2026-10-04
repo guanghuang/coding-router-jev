@@ -208,11 +208,12 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, eligibleCandidates, config.minConfidence, CLAUDE_OVERRIDE_ALIASES);
         const selected = eligibleCandidates.find(c => c.tier === decision.tier) ?? eligibleCandidates[0] ?? candidates[0];
 
-        // Effort normalization for Claude models
+        // Effort normalization: prefer JEV confident choice, then preserve last effort if supported, then model default
         const effortAnswer = result.response?.answers?.reasoning_effort;
-        const desiredEffort = effortAnswer?.type === "choice" && Number.isFinite(effortAnswer.confidence) && effortAnswer.confidence >= config.minConfidence ? effortAnswer.choice : undefined;
+        const desiredEffort = effortAnswer?.type === "choice" && Number.isFinite(effortAnswer.confidence) && effortAnswer.confidence >= 0 && effortAnswer.confidence <= 1 && effortAnswer.confidence >= config.minConfidence ? effortAnswer.choice : undefined;
         const selectedCaps = lookupCapabilities(selected.id);
-        const effectiveEffort = resolveClaudeThinking(desiredEffort, selectedCaps, body as Record<string, unknown>);
+        const effortToApply = desiredEffort ?? state.lastEffort;
+        const effectiveEffort = resolveClaudeThinking(effortToApply, selectedCaps, body as Record<string, unknown>);
 
         state.model = selected.id;
         state.tier = decision.tier;
@@ -235,9 +236,18 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         state.noticeKey = noticeKey;
 
         history.append({ id, at: new Date().toISOString(), conversation: key, turn: turnKey, prompt: turn.prompt, jev: result, previous: { tier: currentTier, model: currentModel }, decision: { ...decision, model: selected.id, effort: effectiveEffort ?? null }, cache });
-      } else if (turn) {
-        notice = state.notice;
-        noticeKey = state.noticeKey;
+      } else {
+        // Same-turn continuation or non-user-message: reuse existing notice
+        if (turn) {
+          notice = state.notice;
+          noticeKey = state.noticeKey;
+        }
+        // Re-apply effort on non-routing paths (same-turn continuations, tool rounds)
+        // to ensure output_config.effort is consistent even when routing is skipped
+        const currentCaps = lookupCapabilities(state.model);
+        if (currentCaps) {
+          resolveClaudeThinking(state.lastEffort, currentCaps, body as Record<string, unknown>);
+        }
       }
 
       body.model = state.model;

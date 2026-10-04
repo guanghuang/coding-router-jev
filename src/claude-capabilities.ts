@@ -79,20 +79,6 @@ const KNOWN_MODELS: ClaudeModelCapabilities[] = [
 
 const BY_ID = new Map(KNOWN_MODELS.map(m => [m.modelId, m]));
 
-const FAMILY_PATTERNS: [RegExp, string][] = [
-  [/^claude-haiku-/i, "haiku"],
-  [/^claude-sonnet-/i, "sonnet"],
-  [/^claude-opus-/i, "opus"],
-  [/^claude-fable-/i, "fable"],
-];
-
-function familyOf(modelId: string): string | undefined {
-  for (const [re, family] of FAMILY_PATTERNS) {
-    if (re.test(modelId)) return family;
-  }
-  return undefined;
-}
-
 /**
  * Look up capabilities for a model ID. Returns capabilities only for
  * exactly registered model IDs. Unknown, custom, or unrecognized version
