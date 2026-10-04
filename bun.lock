@@ -11,6 +11,14 @@
         "@types/bun": "^1.4.2",
         "typescript": "^5.9.3",
       },
+      "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+      },
+      "optionalPeers": [
+        "@earendil-works/pi-ai",
+        "@earendil-works/pi-coding-agent",
+      ],
     },
   },
   "packages": {
