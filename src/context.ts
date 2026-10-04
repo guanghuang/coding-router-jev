@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { CodexBody, Item, RecentContext } from "./types";
 
+const JEV_ID_RE = /^jev-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const isJevNotice = (item: Item): boolean =>
+  item.role === "assistant" && typeof item.id === "string" && JEV_ID_RE.test(item.id);
+
 export const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 24);
 export function textOf(item: Item): string {
   const text = typeof item.content === "string" ? item.content :
