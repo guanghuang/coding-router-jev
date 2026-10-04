@@ -88,6 +88,7 @@ describe("generateClaudePlugin", () => {
       const skillContent = readFileSync(skillPath, "utf-8");
       expect(skillContent).toContain("jev-logs");
       expect(skillContent).toContain("'/usr/local/bin/jev-logs'");
+      expect(skillContent).toContain("'/tmp/session.jsonl'");
 
       result.cleanup();
       expect(existsSync(result.pluginDir)).toBe(false);

@@ -1,10 +1,9 @@
 #!/usr/bin/env bun
 
+import { dirname } from "node:path";
 import { configFromEnv, loadEnv } from "./config";
 import { claudeArgs, startClaudeProxy } from "./claude-proxy";
 import { generateClaudePlugin, resolveJevLogsPath, addPluginDirArg } from "./claude-skill";
-import { buildStatusLine } from "./claude-status";
-import { dirname } from "node:path";
 
 const args = process.argv.slice(2);
 let proxy: ReturnType<typeof startClaudeProxy> | undefined;
@@ -18,26 +17,26 @@ try {
 
   if (hasKey) {
     const config = configFromEnv();
-    proxy = startClaudeProxy(config, {
-      onNotice(notice) {
-        // Status notices are available for session-local display
-      },
-    });
+    proxy = startClaudeProxy(config);
     childArgs = claudeArgs(args, process.env);
     logPath = proxy.logPath;
 
     // Generate session-local plugin for jev-logs skill
-    const jevLogsPath = resolveJevLogsPath(dirname(dirname(import.meta.path)));
     if (logPath) {
-      const plugin = generateClaudePlugin({
-        jevLogsPath,
-        sessionLogPath: logPath,
-        env: process.env,
-      });
+      try {
+        const jevLogsPath = resolveJevLogsPath(dirname(dirname(import.meta.path)));
+        const plugin = generateClaudePlugin({
+          jevLogsPath,
+          sessionLogPath: logPath,
+          env: process.env,
+        });
 
-      if (!plugin.skipped) {
-        childArgs = addPluginDirArg(childArgs, plugin.pluginDir);
-        pluginCleanup = plugin.cleanup;
+        if (!plugin.skipped) {
+          childArgs = addPluginDirArg(childArgs, plugin.pluginDir);
+          pluginCleanup = plugin.cleanup;
+        }
+      } catch (error) {
+        console.error(`[Jev] could not generate jev-logs plugin: ${error instanceof Error ? error.message : "unknown error"}`);
       }
     }
   } else {

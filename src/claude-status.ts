@@ -1,5 +1,5 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from "node:fs";
+import { join } from "node:path";
 import { formatFeedback, type FeedbackValues } from "./feedback";
 
 /**
@@ -12,8 +12,9 @@ export function buildStatusLine(values: FeedbackValues, format?: string): string
 
 /**
  * Write a Claude settings JSON file that sets the statusLine.
- * Returns the path written, or undefined if the user already has a status
- * line configured and we should not overwrite it.
+ * Returns the path written. If `preserveExisting` is set and the user
+ * already has a `user_status_line`, writes still succeed but no replacement
+ * occurs — the existing value is kept.
  *
  * The file is written to `dir/settings.json` as a launch-local temporary
  * config (not the user's global ~/.claude/settings.json).
@@ -35,15 +36,19 @@ export function writeStatusFile(
 
   const settings = { status_line: statusLine };
   const tmp = settingsPath + ".tmp";
-  writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
-  const { renameSync } = require("node:fs");
-  renameSync(tmp, settingsPath);
+  try {
+    writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+    renameSync(tmp, settingsPath);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* best effort cleanup */ }
+    throw error;
+  }
   return settingsPath;
 }
 
 /**
  * Update the status line in an existing settings file.
- * Returns true if updated, false if file doesn't exist.
+ * Returns true if updated, false if file doesn't exist or has user_status_line.
  */
 export function updateStatusLine(statusLine: string, settingsPath: string): boolean {
   if (!existsSync(settingsPath)) return false;
@@ -52,9 +57,13 @@ export function updateStatusLine(statusLine: string, settingsPath: string): bool
     if (existing.user_status_line) return false;
     existing.status_line = statusLine;
     const tmp = settingsPath + ".tmp";
-    writeFileSync(tmp, JSON.stringify(existing, null, 2) + "\n", { mode: 0o600 });
-    const { renameSync } = require("node:fs");
-    renameSync(tmp, settingsPath);
+    try {
+      writeFileSync(tmp, JSON.stringify(existing, null, 2) + "\n", { mode: 0o600 });
+      renameSync(tmp, settingsPath);
+    } catch (error) {
+      try { unlinkSync(tmp); } catch { /* best effort cleanup */ }
+      throw error;
+    }
     return true;
   } catch {
     return false;

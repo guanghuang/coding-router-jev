@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -258,6 +258,69 @@ describe("claudeQueryLogs", () => {
     }
   });
 
+  test("returns error for unreadable file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claude-logs-test-"));
+    try {
+      const path = join(dir, "test.jsonl");
+      await writeFile(path, recordLine(makeRecord()));
+      await chmod(path, 0o000);
+      const result = claudeQueryLogs(path);
+      expect(result).toContain("Could not read");
+    } finally {
+      await chmod(join(dir, "test.jsonl"), 0o644).catch(() => {});
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("handles observation-only log", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claude-logs-test-"));
+    try {
+      const path = join(dir, "test.jsonl");
+      const obs: ResponseObservation = {
+        type: "response-observation",
+        decision_id: "d1",
+        input_tokens: 500,
+      };
+      await writeFile(path, recordLine(obs));
+      const result = claudeQueryLogs(path);
+      expect(result).toContain("no valid decision records");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("filters by model, decision, and date", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claude-logs-test-"));
+    try {
+      const path = join(dir, "test.jsonl");
+      const lines = [
+        recordLine(makeRecord({ decision: { tier: "fast", reason: "override", model: "claude-haiku", effort: "low" }, at: "2026-10-04T10:00:00Z" })),
+        recordLine(makeRecord({ decision: { tier: "strong", reason: "jev", model: "claude-sonnet", effort: "high" }, at: "2026-10-05T10:00:00Z" })),
+      ].join("\n");
+      await writeFile(path, lines);
+
+      expect(claudeQueryLogs(path, { last: 10, filterModel: "haiku" })).toContain("haiku");
+      expect(claudeQueryLogs(path, { last: 10, filterDecision: "override" })).toContain("override");
+      expect(claudeQueryLogs(path, { last: 10, filterDate: "2026-10-05" })).toContain("sonnet");
+      expect(claudeQueryLogs(path, { last: 10, filterDate: "2026-10-05" })).not.toContain("haiku");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("invalid limit NaN and Infinity", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claude-logs-test-"));
+    try {
+      const path = join(dir, "test.jsonl");
+      await writeFile(path, recordLine(makeRecord()));
+      expect(claudeQueryLogs(path, { last: NaN })).toContain("Invalid limit");
+      expect(claudeQueryLogs(path, { last: Infinity })).toContain("Invalid limit");
+      expect(claudeQueryLogs(path, { last: -Infinity })).toContain("Invalid limit");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("two simultaneous wrappers cannot leak logs", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claude-logs-test-"));
     try {
@@ -321,5 +384,20 @@ describe("mergeObservations", () => {
     }];
     const merged = mergeObservations(decisions, obs);
     expect(merged[0]).toEqual(decisions[0]);
+  });
+
+  test("merges cache_write_tokens and preserves existing cache fields", () => {
+    const decisions = [makeRecord({ id: "d1", cache: { window: "test", observed_responses: 5 } })];
+    const obs: ResponseObservation[] = [{
+      type: "response-observation",
+      decision_id: "d1",
+      cache_write_tokens: 1500,
+    }];
+    const merged = mergeObservations(decisions, obs);
+    const cache = merged[0].cache as Record<string, unknown>;
+    expect(cache.window).toBe("test");
+    expect(cache.observed_responses).toBe(5);
+    const usage = cache.agent_usage as Record<string, unknown>;
+    expect(usage.cache_write_tokens).toBe(1500);
   });
 });

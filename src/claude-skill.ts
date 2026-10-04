@@ -1,11 +1,10 @@
-import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync, lstatSync, unlinkSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, chmodSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 const PLUGIN_NAME = "claude-jev";
 const SKILL_NAME = "jev-logs";
-const MANAGED_HEADER = "<!-- managed by coding-router-jev -->";
 
 export type ClaudePluginOptions = {
   /** Path to the jev-logs executable or bun script */
@@ -38,14 +37,31 @@ function shellQuote(path: string): string {
 }
 
 /**
- * Generate the Claude plugin SKILL.md content for jev-logs.
- * Uses the jev-logs binary/script path and session log path.
+ * Load the bundled Claude skill template from the plugins directory
+ * and substitute the jev-logs binary path and session log path.
+ */
+function loadSkillTemplate(jevLogsPath: string, sessionLogPath: string): string {
+  const templatePath = join(dirname(dirname(import.meta.path)), "plugins", PLUGIN_NAME, "skills", SKILL_NAME, "SKILL.md");
+  try {
+    const template = readFileSync(templatePath, "utf-8");
+    const quotedBin = shellQuote(jevLogsPath);
+    const quotedLog = shellQuote(sessionLogPath);
+    return template
+      .replace(/jev-logs "\$JEV_SESSION_LOG"/g, `${quotedBin} ${quotedLog}`)
+      .replace(/jev-logs "\$\{JEV_SESSION_LOG\}"/g, `${quotedBin} ${quotedLog}`);
+  } catch {
+    return generateSkillContent(jevLogsPath, sessionLogPath);
+  }
+}
+
+/**
+ * Generate the Claude plugin SKILL.md content for jev-logs (embedded fallback).
  */
 export function generateSkillContent(jevLogsPath: string, sessionLogPath: string): string {
   const quotedBin = shellQuote(jevLogsPath);
   const quotedLog = shellQuote(sessionLogPath);
 
-  return `${MANAGED_HEADER}
+  return `<!-- managed by coding-router-jev -->
 ---
 name: ${SKILL_NAME}
 description: >-
@@ -116,6 +132,11 @@ ${quotedBin} ${quotedLog} --last 10 --filter-date 2026-10-04
 ${quotedBin} ${quotedLog} --last 1 --detail
 \`\`\`
 
+## Native invocation
+
+This skill is delivered as the \`${PLUGIN_NAME}\` plugin.
+Use \`/${PLUGIN_NAME}:${SKILL_NAME}\` to invoke it explicitly.
+
 ## Output format
 
 Default output is a concise human-readable summary with:
@@ -126,11 +147,6 @@ Default output is a concise human-readable summary with:
 - Cache observations (when available)
 
 Use \`--detail\` to include the full prompt text and JEV latency.
-
-## Native invocation
-
-This skill is delivered as the \`${PLUGIN_NAME}\` plugin.
-Use \`/${PLUGIN_NAME}:${SKILL_NAME}\` to invoke it explicitly.
 
 ## Privacy
 
@@ -184,29 +200,37 @@ export function generateClaudePlugin(options: ClaudePluginOptions): ClaudePlugin
   const tmpBase = options.tmpBase ?? tmpdir();
   const pluginDir = join(tmpBase, `claude-jev-plugin-${process.pid}-${randomUUID().slice(0, 8)}`);
 
-  const pluginMetaDir = join(pluginDir, ".claude-plugin");
-  const skillDir = join(pluginDir, "skills", SKILL_NAME);
-
-  mkdirSync(pluginMetaDir, { recursive: true });
-  mkdirSync(skillDir, { recursive: true });
-
-  writeFileSync(
-    join(pluginMetaDir, "plugin.json"),
-    generatePluginManifest(),
-    { mode: 0o644 },
-  );
-
-  writeFileSync(
-    join(skillDir, "SKILL.md"),
-    generateSkillContent(options.jevLogsPath, options.sessionLogPath),
-    { mode: 0o644 },
-  );
-
+  // Register cleanup early so partial state is cleaned on failure
   const cleanup = () => {
     try {
       rmSync(pluginDir, { recursive: true, force: true });
     } catch { /* best effort */ }
   };
+
+  try {
+    const pluginMetaDir = join(pluginDir, ".claude-plugin");
+    const skillDir = join(pluginDir, "skills", SKILL_NAME);
+
+    mkdirSync(pluginMetaDir, { recursive: true, mode: 0o700 });
+    mkdirSync(skillDir, { recursive: true, mode: 0o700 });
+    chmodSync(pluginDir, 0o700);
+
+    writeFileSync(
+      join(pluginMetaDir, "plugin.json"),
+      generatePluginManifest(),
+      { mode: 0o600 },
+    );
+
+    const skillContent = loadSkillTemplate(options.jevLogsPath, options.sessionLogPath);
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      skillContent,
+      { mode: 0o600 },
+    );
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 
   return { pluginDir, cleanup, skipped: false };
 }
