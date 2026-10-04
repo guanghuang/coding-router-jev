@@ -47,13 +47,9 @@ describe("Pi package manifest", () => {
     expect(pkg.pi.skills).toContain("./skills/pi/jev-logs");
   });
 
-  test("pi-extension exports activate function", async () => {
+  test("pi-extension exports activate and createPiAdapter", async () => {
     const mod = await import("../src/pi-extension");
     expect(typeof mod.activate).toBe("function");
-  });
-
-  test("pi-extension exports createPiAdapter function", async () => {
-    const mod = await import("../src/pi-extension");
     expect(typeof mod.createPiAdapter).toBe("function");
   });
 });
