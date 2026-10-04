@@ -24,7 +24,7 @@ export function writeStatusFile(
   dir: string,
   options: { preserveExisting?: boolean } = {},
 ): string {
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const settingsPath = join(dir, "settings.json");
 
   if (options.preserveExisting && existsSync(settingsPath)) {

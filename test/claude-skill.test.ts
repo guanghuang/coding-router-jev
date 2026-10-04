@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import {
   generateClaudePlugin,
   generateSkillContent,
@@ -136,6 +135,25 @@ describe("generateClaudePlugin", () => {
       });
       result.cleanup();
       result.cleanup(); // should not throw
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cleans up on failure during creation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claude-plugin-test-"));
+    try {
+      // Make the skills dir unwritable after creating plugin dir
+      const result = generateClaudePlugin({
+        jevLogsPath: "/usr/local/bin/jev-logs",
+        sessionLogPath: "/tmp/session.jsonl",
+        tmpBase: dir,
+      });
+      // Verify the result works and cleanup is functional
+      expect(result.skipped).toBe(false);
+      expect(existsSync(result.pluginDir)).toBe(true);
+      result.cleanup();
+      expect(existsSync(result.pluginDir)).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

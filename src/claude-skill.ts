@@ -41,7 +41,8 @@ function shellQuote(path: string): string {
  * and substitute the jev-logs binary path and session log path.
  */
 function loadSkillTemplate(jevLogsPath: string, sessionLogPath: string): string {
-  const templatePath = join(dirname(dirname(import.meta.path)), "plugins", PLUGIN_NAME, "skills", SKILL_NAME, "SKILL.md");
+  const base = import.meta.dir ? dirname(import.meta.dir) : dirname(dirname(import.meta.path));
+  const templatePath = join(base, "plugins", PLUGIN_NAME, "skills", SKILL_NAME, "SKILL.md");
   try {
     const template = readFileSync(templatePath, "utf-8");
     const quotedBin = shellQuote(jevLogsPath);

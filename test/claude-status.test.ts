@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,6 +121,18 @@ describe("updateStatusLine", () => {
 
   test("returns false for missing file", () => {
     expect(updateStatusLine("test", "/nonexistent/settings.json")).toBe(false);
+  });
+
+  test("returns false for corrupt JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claude-status-test-"));
+    try {
+      const path = join(dir, "settings.json");
+      writeFileSync(path, "corrupt {{{ json");
+      const updated = updateStatusLine("new", path);
+      expect(updated).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("returns false when user_status_line exists", async () => {

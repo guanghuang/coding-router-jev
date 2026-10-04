@@ -24,7 +24,8 @@ try {
     // Generate session-local plugin for jev-logs skill
     if (logPath) {
       try {
-        const jevLogsPath = resolveJevLogsPath(dirname(dirname(import.meta.path)));
+        const projectRoot = import.meta.dir ? dirname(import.meta.dir) : undefined;
+        const jevLogsPath = resolveJevLogsPath(projectRoot);
         const plugin = generateClaudePlugin({
           jevLogsPath,
           sessionLogPath: logPath,
