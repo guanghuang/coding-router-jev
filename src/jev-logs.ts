@@ -17,7 +17,34 @@ export type LogRecord = {
   previous?: { tier?: string; model?: string; effort?: string | null };
   decision?: { tier?: string; reason?: string; model?: string; effort?: string | null; effort_update_preserves_prefix?: boolean };
   cache?: Record<string, unknown>;
+  agent?: string;
+  session?: string;
+  branch?: string;
+  requested_effort?: string;
+  effective_effort?: string;
+  provider_model?: string;
+  capacity_status?: string;
+  capacity_reason?: string;
 };
+
+export type ResponseObservation = {
+  type: "response-observation";
+  decision_id?: string;
+  turn?: string;
+  at?: string;
+  agent?: string;
+  session?: string;
+  branch?: string;
+  provider_model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+};
+
+export function isObservation(record: unknown): record is ResponseObservation {
+  return !!record && typeof record === "object" && (record as Record<string, unknown>).type === "response-observation";
+}
 
 export type QueryOptions = {
   last?: number;
@@ -98,7 +125,14 @@ export function formatSummary(record: LogRecord): string {
   if (record.decision) {
     parts.push(`Tier: ${formatValue(record.decision.tier)}`);
     parts.push(`Model: ${formatValue(record.decision.model)}`);
-    parts.push(`Effort: ${formatValue(record.decision.effort)}`);
+    if (record.provider_model) {
+      parts.push(`Provider model: ${record.provider_model}`);
+    }
+    if (record.effective_effort !== undefined) {
+      parts.push(`Effective effort: ${formatValue(record.effective_effort)}`);
+    } else {
+      parts.push(`Effort: ${formatValue(record.decision.effort)}`);
+    }
     parts.push(`Decision: ${formatValue(record.decision.reason)}`);
   }
 
@@ -130,6 +164,17 @@ export function formatSummary(record: LogRecord): string {
         parts.push(`Cache: ${formatValue(last.cache_read_tokens)} read / ${formatValue(last.cache_created_tokens)} write`);
       }
     }
+    const agentUsage = record.cache.agent_usage as { input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number } | undefined;
+    if (agentUsage) {
+      const usageParts: string[] = [];
+      if (agentUsage.input_tokens !== undefined) usageParts.push(`${agentUsage.input_tokens} in`);
+      if (agentUsage.output_tokens !== undefined) usageParts.push(`${agentUsage.output_tokens} out`);
+      if (agentUsage.cache_read_tokens !== undefined) usageParts.push(`${agentUsage.cache_read_tokens} cache read`);
+      if (agentUsage.cache_write_tokens !== undefined) usageParts.push(`${agentUsage.cache_write_tokens} cache write`);
+      if (usageParts.length > 0) {
+        parts.push(`Agent usage: ${usageParts.join(" / ")}`);
+      }
+    }
   }
 
   if (record.jev?.error) {
@@ -150,6 +195,16 @@ export function formatDetail(record: LogRecord): string {
 
   if (record.previous) {
     extras.push(`\nPrevious: tier=${formatValue(record.previous.tier)}, model=${formatValue(record.previous.model)}, effort=${formatValue(record.previous.effort)}`);
+  }
+
+  if (record.requested_effort !== undefined && record.effective_effort !== undefined
+      && record.requested_effort !== record.effective_effort) {
+    extras.push(`Requested effort: ${record.requested_effort} → effective: ${record.effective_effort}`);
+  }
+
+  if (record.capacity_status) {
+    const reason = record.capacity_reason ? ` (${record.capacity_reason})` : "";
+    extras.push(`Capacity: ${record.capacity_status}${reason}`);
   }
 
   if (record.jev?.ms !== undefined) {

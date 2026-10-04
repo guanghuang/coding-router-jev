@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { utimesSync } from "node:fs";
+import { utimesSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile, mkdir, readdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupStaleLogs } from "../src/history";
+import { cleanupStaleLogs, sessionHistory } from "../src/history";
 
 async function createFile(dir: string, name: string, ageMs: number): Promise<string> {
   const path = join(dir, name);
@@ -144,6 +144,92 @@ describe("cleanupStaleLogs", () => {
 
       const remaining = await readdir(dir);
       expect(remaining).toEqual(["codex-old.jsonl"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("pi agent cleanup deletes only pi-prefixed logs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-cleanup-test-"));
+    try {
+      await createFile(dir, "pi-old-session.jsonl", 10 * DAY_MS);
+      await createFile(dir, "pi-recent-session.jsonl", 1 * DAY_MS);
+      await createFile(dir, "codex-old.jsonl", 10 * DAY_MS);
+
+      cleanupStaleLogs(dir, 5, "pi");
+
+      const remaining = (await readdir(dir)).sort();
+      expect(remaining).toEqual(["codex-old.jsonl", "pi-recent-session.jsonl"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("codex agent cleanup does not delete pi-prefixed logs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-cleanup-test-"));
+    try {
+      await createFile(dir, "codex-old.jsonl", 10 * DAY_MS);
+      await createFile(dir, "pi-old.jsonl", 10 * DAY_MS);
+
+      cleanupStaleLogs(dir, 5, "codex");
+
+      const remaining = (await readdir(dir)).sort();
+      expect(remaining).toEqual(["pi-old.jsonl"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("default agent cleanup is codex", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-cleanup-test-"));
+    try {
+      await createFile(dir, "codex-old.jsonl", 10 * DAY_MS);
+      await createFile(dir, "pi-old.jsonl", 10 * DAY_MS);
+
+      cleanupStaleLogs(dir, 5);
+
+      const remaining = (await readdir(dir)).sort();
+      expect(remaining).toEqual(["pi-old.jsonl"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("sessionHistory", () => {
+  test("creates pi-prefixed log file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-history-test-"));
+    try {
+      const hist = sessionHistory("test-session", dir, "pi");
+      expect(hist.path).toContain("pi-test-session.jsonl");
+      hist.append({ id: "test" });
+      const content = readFileSync(hist.path, "utf-8");
+      expect(content).toContain('"id":"test"');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("creates codex-prefixed log by default", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-history-test-"));
+    try {
+      const hist = sessionHistory("test-session", dir);
+      expect(hist.path).toContain("codex-test-session.jsonl");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects unsupported agent prefix", () => {
+    expect(() => sessionHistory("test", undefined, "other" as any)).toThrow("Unsupported agent prefix");
+  });
+
+  test("sanitizes session id", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-history-test-"));
+    try {
+      const hist = sessionHistory("../../../etc/passwd", dir, "pi");
+      expect(hist.path).not.toContain("..");
+      expect(hist.path).toContain("pi-etcpasswd.jsonl");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
