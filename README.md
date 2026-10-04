@@ -10,7 +10,7 @@ All installation paths require the Codex CLI (`codex`) installed separately with
 
 Download a prebuilt standalone binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases). No Bun installation required.
 
-### One-command installer
+### One-command installer (macOS/Linux)
 
 The `install.sh` script detects your OS and architecture, downloads the correct binary, verifies its SHA-256 checksum, and places it in `~/.local/bin`. No sudo required.
 
@@ -40,7 +40,7 @@ less install.sh      # review the script
 sh install.sh        # run after review
 ```
 
-#### Installer flags
+#### Installer flags (macOS/Linux)
 
 | Flag | Environment variable | Description |
 |------|---------------------|-------------|
@@ -65,7 +65,7 @@ sh install.sh --version v0.0.9
 sh install.sh --dir /opt/bin
 ```
 
-**Uninstall:**
+**Uninstall (macOS/Linux):**
 
 ```sh
 rm ~/.local/bin/codex-jev    # or your custom --dir path
@@ -73,6 +73,74 @@ rm ~/.local/bin/codex-jev    # or your custom --dir path
 ```
 
 The installer never modifies `~/.coding-router-jev.env` or shell startup files. When the install directory is not in your `PATH`, the script prints the export command to add. Repeating the install upgrades the binary without accumulating `PATH` entries.
+
+### One-command installer (Windows)
+
+The `install.ps1` PowerShell script downloads the Windows x64 binary, verifies its SHA-256 checksum, and installs it to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
+
+**Public repository (once public):**
+
+```powershell
+irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
+```
+
+**Private repository (requires authentication):**
+
+```powershell
+# Option 1: Set GH_TOKEN and run
+$env:GH_TOKEN = "ghp_your_token"
+irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
+.\install.ps1
+
+# Option 2: Clone and run from source checkout
+git clone https://github.com/guanghuang/coding-router-jev.git
+$env:GH_TOKEN = "ghp_your_token"
+.\coding-router-jev\install.ps1
+```
+
+**Download and review before executing:**
+
+```powershell
+irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
+Get-Content install.ps1   # review the script
+.\install.ps1              # run after review
+```
+
+#### Installer flags (Windows)
+
+| Flag | Environment variable | Description |
+|------|---------------------|-------------|
+| `-Version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
+| `-Dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `$env:LOCALAPPDATA\coding-router-jev\bin`) |
+| `-Help` | — | Show usage |
+| — | `GH_TOKEN` | GitHub token for private repository access |
+
+**Version pinning and rollback:**
+
+```powershell
+# Install a specific version
+.\install.ps1 -Version v0.1.0
+
+# Rollback to an older version
+.\install.ps1 -Version v0.0.9
+```
+
+**Custom install directory:**
+
+```powershell
+.\install.ps1 -Dir C:\tools\bin
+```
+
+**Uninstall (Windows):**
+
+```powershell
+Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev.exe"
+# ~/.coding-router-jev.env is yours to keep or remove
+```
+
+The installer adds the install directory to the user `PATH` (not the system `PATH`) without administrator privileges and without duplicate entries. The binary is available in the current session immediately; open a new terminal for other shells to pick it up. The installer never modifies `~/.coding-router-jev.env`. If a running `codex-jev.exe` locks the existing binary, the installer reports an actionable error.
+
+> **Note:** The binary is unsigned. Windows SmartScreen may prompt on first run. This is expected for unsigned executables distributed outside the Windows Store.
 
 ### Manual download
 
