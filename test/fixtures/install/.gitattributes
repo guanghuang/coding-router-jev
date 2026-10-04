@@ -1,5 +1,7 @@
 # Fixture binaries and checksums must preserve exact bytes across platforms.
 # Git autocrlf must not modify these files.
 codex-jev-* binary
+claude-jev-* binary
+jev-logs-* binary
 SHA256SUMS -text
 SHA256SUMS.bad -text
