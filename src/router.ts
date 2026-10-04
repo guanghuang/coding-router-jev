@@ -29,7 +29,7 @@ export type RoutingInput = {
   candidates: Candidate[];
   recentContext?: RecentContext;
   cache?: Record<string, JsonValue>;
-  agent?: string;
+  agent?: "codex" | "pi";
   callerOptions?: CallerOptions;
 };
 export function buildRequest(input: RoutingInput): SystemOneRequest {
@@ -72,18 +72,26 @@ export function createRouter(): Route {
   return async input => {
     const request = buildRequest(input);
     const started = Date.now();
+    const callerSignal = input.callerOptions?.signal;
+    if (callerSignal?.aborted) {
+      return { request, response: null, error: "Routing cancelled by caller", aborted: true, ms: Date.now() - started };
+    }
+    const local = callerSignal ? new AbortController() : undefined;
+    const onCallerAbort = local ? () => local.abort() : undefined;
+    if (callerSignal && onCallerAbort) callerSignal.addEventListener("abort", onCallerAbort, { once: true });
     try {
       client ??= new TypeSafeClient({ timeout: 1500, retry: { maxRetries: 1, backoffInitialMs: 150, backoffMaxMs: 400 }, logLevel: "warn" });
       request.model = client.defaultModel;
       const timeoutSignal = AbortSignal.timeout(3000);
-      const callerSignal = input.callerOptions?.signal;
-      const signal = callerSignal ? AbortSignal.any([timeoutSignal, callerSignal]) : timeoutSignal;
+      const signal = local ? AbortSignal.any([timeoutSignal, local.signal]) : timeoutSignal;
       const response = await client.systemOne(request, { signal });
       return { request, response, ms: Date.now() - started };
     } catch (error) {
-      const callerAborted = input.callerOptions?.signal?.aborted === true;
+      const callerAborted = callerSignal?.aborted === true;
       const message = callerAborted ? "Routing cancelled by caller" : error instanceof Error ? error.message : "JEV routing failed";
       return { request, response: null, error: message, ...(callerAborted ? { aborted: true } : {}), ms: Date.now() - started };
+    } finally {
+      if (callerSignal && onCallerAbort) callerSignal.removeEventListener("abort", onCallerAbort);
     }
   };
 }

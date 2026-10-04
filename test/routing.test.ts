@@ -226,3 +226,28 @@ test("candidatesFor without catalog context_window has undefined capacity", () =
   const result = candidatesFor(configFromEnv({}), new Map());
   expect(result[0].capacity).toBeUndefined();
 });
+
+test("eligibility: exact boundary (requiredContext === usable) is eligible", () => {
+  const candidate: Candidate = { tier: "fast", id: "exact", description: "Exact", efforts: ["low"], capacity: { contextWindow: 100_000, outputBudget: 20_000 } };
+  const result = checkEligibility([candidate], 80_000, 10_000);
+  expect(result.eligible.map(c => c.id)).toEqual(["exact"]);
+  expect(result.rejected).toHaveLength(0);
+});
+
+test("eligibility: mixed eligible, rejected, and unknown in one call", () => {
+  const small: Candidate = { tier: "fast", id: "small", description: "Small", efforts: ["low"], capacity: { contextWindow: 50_000 } };
+  const large: Candidate = { tier: "balanced", id: "large", description: "Large", efforts: ["medium"], capacity: { contextWindow: 500_000 } };
+  const noInfo: Candidate = { tier: "strong", id: "noinfo", description: "Unknown", efforts: ["high"] };
+  const result = checkEligibility([small, large, noInfo], 100_000, 16_000);
+  expect(result.eligible.map(c => c.id)).toEqual(["large"]);
+  expect(result.rejected.map(r => r.candidate.id)).toEqual(["small"]);
+  expect(result.unknown.map(c => c.id)).toEqual(["noinfo"]);
+});
+
+test("eligibility: contextWindow 0 is classified as unknown", () => {
+  const candidate: Candidate = { tier: "fast", id: "zero", description: "Zero", efforts: ["low"], capacity: { contextWindow: 0 } };
+  const result = checkEligibility([candidate], 1000, 500);
+  expect(result.unknown.map(c => c.id)).toEqual(["zero"]);
+  expect(result.eligible).toHaveLength(0);
+  expect(result.rejected).toHaveLength(0);
+});

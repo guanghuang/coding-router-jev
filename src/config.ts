@@ -6,12 +6,7 @@ import { TIERS, type Tier } from "./types";
 
 export const ENV_FILE = join(homedir(), ".coding-router-jev.env");
 
-export type ModelMap = {
-  fast: string;
-  balanced: string;
-  strong: string;
-  long: string;
-};
+export type ModelMap = Record<Tier, string>;
 
 export type Config = {
   codexModels: ModelMap;

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { configFromEnv } from "../src/config";
 import { candidatesFor } from "../src/proxy";
-import { buildRequest, createRouter } from "../src/router";
+import { createRouter } from "../src/router";
 
 test("TypeSafe SDK reads its native env variables and the logged request includes its resolved model", async () => {
   let body: Record<string, unknown> | undefined;
@@ -65,7 +65,30 @@ test("timeout still works when no caller signal is provided", async () => {
     const result = await createRouter()({ prompt: "test", currentTier: "fast", currentModel: "gpt-6-luna", contextTokens: 10, candidates: candidatesFor(configFromEnv({}), new Map()) });
     expect(result.response).toBeNull();
     expect(result.error).toBeDefined();
+    expect(result.error).not.toBe("Routing cancelled by caller");
     expect(result.aborted).toBeUndefined();
+  } finally {
+    for (const key of keys) { if (prior[key] === undefined) delete process.env[key]; else process.env[key] = prior[key]; }
+    server.stop(true);
+  }
+});
+
+test("already-aborted signal is detected as caller cancellation", async () => {
+  const server = Bun.serve({ port: 0, async fetch() {
+    return Response.json({ model: "test-jev", answers: { model: { type: "choice", choice: "fast", confidence: 0.8, probabilities: {} }, reasoning_effort: { type: "choice", choice: "low", confidence: 0.9, probabilities: {} } }, usage: { input_tokens: 1, output_tokens: 1 } });
+  } });
+  const keys = ["TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_DEFAULT_MODEL"] as const;
+  const prior = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  try {
+    process.env.TYPESAFE_API_KEY = "test-only-key";
+    process.env.TYPESAFE_BASE_URL = `http://127.0.0.1:${server.port}`;
+    process.env.TYPESAFE_DEFAULT_MODEL = "test-jev";
+    const controller = new AbortController();
+    controller.abort();
+    const result = await createRouter()({ prompt: "test", currentTier: "fast", currentModel: "gpt-6-luna", contextTokens: 10, candidates: candidatesFor(configFromEnv({}), new Map()), callerOptions: { signal: controller.signal } });
+    expect(result.response).toBeNull();
+    expect(result.error).toBe("Routing cancelled by caller");
+    expect(result.aborted).toBe(true);
   } finally {
     for (const key of keys) { if (prior[key] === undefined) delete process.env[key]; else process.env[key] = prior[key]; }
     server.stop(true);
