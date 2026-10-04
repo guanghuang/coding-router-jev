@@ -1,4 +1,4 @@
-import { TIERS, type Candidate, type Tier } from "./types";
+import { TIERS, type Candidate, type EligibilityResult, type Tier } from "./types";
 
 export function decide(prompt: string, choice: string | undefined, confidence: number | undefined, current: Tier, candidates: Candidate[], minConfidence: number) {
   const available = candidates.map(candidate => candidate.tier);
@@ -41,4 +41,25 @@ const DECISION_LABELS: Record<string, string> = {
 };
 export function decisionLabel(reason: string): string {
   return DECISION_LABELS[reason] ?? reason;
+}
+
+export function checkEligibility(candidates: Candidate[], requiredContext: number, reservedOutput: number): EligibilityResult {
+  const eligible: Candidate[] = [];
+  const rejected: { candidate: Candidate; reason: string }[] = [];
+  const unknown: Candidate[] = [];
+  for (const candidate of candidates) {
+    const cap = candidate.capacity;
+    if (!cap?.contextWindow) {
+      unknown.push(candidate);
+      continue;
+    }
+    const outputReserve = cap.outputBudget ?? reservedOutput;
+    const usable = cap.contextWindow - outputReserve;
+    if (requiredContext > usable) {
+      rejected.push({ candidate, reason: `requires ${requiredContext} context tokens + ${outputReserve} output reserve; candidate capacity is ${cap.contextWindow} (usable ${usable})` });
+    } else {
+      eligible.push(candidate);
+    }
+  }
+  return { eligible, rejected, unknown };
 }

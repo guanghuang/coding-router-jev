@@ -19,5 +19,21 @@ export type CodexBody = {
   truncation?: string;
   [key: string]: unknown;
 };
-export type Candidate = { tier: Tier; id: string; description: string; efforts: string[]; defaultEffort?: string };
+export type CapacityInfo = { contextWindow?: number; outputBudget?: number };
+export type Candidate = { tier: Tier; id: string; description: string; efforts: string[]; defaultEffort?: string; capacity?: CapacityInfo };
 export type RecentContext = { previous_user_request: string; previous_assistant_excerpt?: string };
+export type ContextEvidence = { tokens: number; source: "measured" | "estimated"; accuracy?: string };
+export type EligibilityResult = {
+  eligible: Candidate[];
+  rejected: { candidate: Candidate; reason: string }[];
+  unknown: Candidate[];
+};
+export type RoutingDecision = {
+  candidate: Candidate;
+  tier: Tier;
+  effort?: string;
+  effectiveEffort?: string;
+  confidence?: number;
+  reason: string;
+  capacityStatus: "eligible" | "ineligible" | "unknown";
+};

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
@@ -5,13 +6,11 @@ import { TIERS, type Tier } from "./types";
 
 export const ENV_FILE = join(homedir(), ".coding-router-jev.env");
 
+export type ModelMap = Record<Tier, string>;
+
 export type Config = {
-  codexModels: {
-    fast: string;
-    balanced: string;
-    strong: string;
-    long: string;
-  };
+  codexModels: ModelMap;
+  piModels: ModelMap;
   startTier: Tier;
   longModelEnabled: boolean;
   minConfidence: number;
@@ -30,7 +29,7 @@ export async function loadEnv(
 ): Promise<void> {
   let fileValues: Record<string, string> = {};
   try {
-    fileValues = parseEnvFile(await Bun.file(envFile).text());
+    fileValues = parseEnvFile(await readFile(envFile, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -50,6 +49,12 @@ export function configFromEnv(environment: Record<string, string | undefined> = 
       balanced: value("CODING_ROUTER_BALANCED_MODEL_CODEX", "chatgpt-6.1-sol"),
       strong: value("CODING_ROUTER_STRONG_MODEL_CODEX", "chatgpt-6.1-sol"),
       long: value("CODING_ROUTER_LONG_MODEL_CODEX", "chatgpt-6-astra"),
+    },
+    piModels: {
+      fast: value("CODING_ROUTER_FAST_MODEL_PI", "openai-codex/gpt-6-luna"),
+      balanced: value("CODING_ROUTER_BALANCED_MODEL_PI", "openai-codex/gpt-6.1-sol"),
+      strong: value("CODING_ROUTER_STRONG_MODEL_PI", "openai-codex/gpt-6.1-sol"),
+      long: value("CODING_ROUTER_LONG_MODEL_PI", "openai-codex/gpt-6-astra"),
     },
     startTier: parseStartTier(value("CODING_ROUTER_START_TIER", ""), longModelEnabled),
     longModelEnabled,

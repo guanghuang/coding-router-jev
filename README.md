@@ -358,6 +358,19 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 
 Configured model choices take priority over catalog detection. The catalog enriches descriptions and effort capabilities. The requested `chatgpt-6*` default names resolve to `gpt-6*` when that corresponding ID appears in the Codex catalog; otherwise the configured ID is sent unchanged. Set an exact provider model ID if your account does not advertise that alias. Account model availability is ultimately enforced by the provider.
 
+### Pi agent configuration
+
+The shared routing configuration includes model mappings for Pi extensions. Pi uses provider-qualified model IDs (e.g. `openai-codex/gpt-6-luna`) where the first slash separates the provider prefix from the model name; model IDs may themselves contain additional slashes.
+
+| Variable | Default |
+| --- | --- |
+| `CODING_ROUTER_FAST_MODEL_PI` | `openai-codex/gpt-6-luna` |
+| `CODING_ROUTER_BALANCED_MODEL_PI` | `openai-codex/gpt-6.1-sol` |
+| `CODING_ROUTER_STRONG_MODEL_PI` | `openai-codex/gpt-6.1-sol` |
+| `CODING_ROUTER_LONG_MODEL_PI` | `openai-codex/gpt-6-astra` |
+
+Shared settings — confidence threshold, recent context, feedback format, log retention, Long model enable — apply to both Codex and Pi. The Pi adapter (issue #25) consumes these mappings; this ticket prepares the configuration without registering Pi models or implementing Pi-specific authentication.
+
 ## Feedback format
 
 The proxy inserts a `[Jev]` routing notice into eligible response streams (see [Routing notices](#routing-notices)). Set `CODING_ROUTER_FEEDBACK_FORMAT` to customize it. When the variable is unset, the default format is:

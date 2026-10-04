@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { configFromEnv } from "../src/config";
 import { isJevNotice, newTurn, recentContext, userAnchors } from "../src/context";
 import { applyEffort, type EffortState } from "../src/effort";
-import { decide, decisionLabel } from "../src/policy";
+import { checkEligibility, decide, decisionLabel } from "../src/policy";
 import { buildRequest } from "../src/router";
 import { candidatesFor, codexArgs, AUTO_MODEL } from "../src/proxy";
 import { observeStream, type Usage } from "../src/stream";
-import type { CodexBody, Item } from "../src/types";
+import type { Candidate, CodexBody, Item } from "../src/types";
 
 const candidates = candidatesFor(configFromEnv({}), new Map());
 test("confidence policy preserves tiers even when models are shared, with no cache guard", () => {
@@ -123,4 +123,131 @@ test("isJevNotice identifies proxy-injected notices by provenance and rejects ev
   expect(isJevNotice({ role: "assistant" })).toBe(false);
   expect(isJevNotice({ role: "assistant", id: "jev-short" })).toBe(false);
   expect(isJevNotice({ role: "assistant", id: "jev-XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" })).toBe(false);
+});
+
+test("buildRequest defaults to Codex agent purpose", () => {
+  const request = buildRequest({ prompt: "debug", currentTier: "fast", currentModel: "gpt-6-luna", contextTokens: 1000, candidates });
+  expect(JSON.stringify(request.state)).toContain("Route the next user turn in Codex");
+  expect(JSON.stringify(request.state)).not.toContain("Route the next user turn in Pi");
+});
+
+test("buildRequest with agent=pi produces Pi-specific purpose", () => {
+  const request = buildRequest({ prompt: "debug", currentTier: "fast", currentModel: "gpt-6-luna", contextTokens: 1000, candidates, agent: "pi" });
+  expect(JSON.stringify(request.state)).toContain("Route the next user turn in Pi");
+  expect(JSON.stringify(request.state)).not.toContain("Route the next user turn in Codex");
+});
+
+test("buildRequest with agent=codex explicitly also uses Codex purpose", () => {
+  const request = buildRequest({ prompt: "hi", currentTier: "fast", currentModel: "gpt-6-luna", contextTokens: 1000, candidates, agent: "codex" });
+  expect(JSON.stringify(request.state)).toContain("Route the next user turn in Codex");
+});
+
+test("buildRequest without agent field uses Codex purpose (backward compatible)", () => {
+  const request = buildRequest({ prompt: "hi", currentTier: "fast", currentModel: "gpt-6-luna", contextTokens: 1000, candidates });
+  expect(JSON.stringify(request.state)).toContain("Route the next user turn in Codex");
+});
+
+test("supported-effort union from candidates is shared across agents", () => {
+  const piCandidates: Candidate[] = [
+    { tier: "fast", id: "openai-codex/gpt-6-luna", description: "Luna", efforts: ["off", "low", "medium"] },
+    { tier: "strong", id: "openai-codex/gpt-6.1-sol", description: "Sol", efforts: ["low", "medium", "high", "xhigh"] },
+  ];
+  const request = buildRequest({ prompt: "test", currentTier: "fast", currentModel: piCandidates[0].id, contextTokens: 1000, candidates: piCandidates, agent: "pi" });
+  const effortQuestion = request.questions.reasoning_effort;
+  expect(effortQuestion.type).toBe("choice");
+  const effortKeys = Object.keys((effortQuestion as { criteria: Record<string, unknown> }).criteria);
+  expect(effortKeys).toContain("keep");
+  expect(effortKeys).toContain("off");
+  expect(effortKeys).toContain("low");
+  expect(effortKeys).toContain("medium");
+  expect(effortKeys).toContain("high");
+  expect(effortKeys).toContain("xhigh");
+});
+
+test("eligibility: 300K request excludes 200K candidate but permits 1M candidate", () => {
+  const small: Candidate = { tier: "fast", id: "small", description: "Small", efforts: ["low"], capacity: { contextWindow: 200_000 } };
+  const large: Candidate = { tier: "strong", id: "large", description: "Large", efforts: ["high"], capacity: { contextWindow: 1_000_000 } };
+  const result = checkEligibility([small, large], 300_000, 16_000);
+  expect(result.eligible.map(c => c.id)).toEqual(["large"]);
+  expect(result.rejected.map(r => r.candidate.id)).toEqual(["small"]);
+  expect(result.rejected[0].reason).toContain("300000");
+  expect(result.unknown).toHaveLength(0);
+});
+
+test("eligibility: candidate with output budget uses it over default reserve", () => {
+  const candidate: Candidate = { tier: "fast", id: "with-budget", description: "Test", efforts: ["low"], capacity: { contextWindow: 100_000, outputBudget: 20_000 } };
+  const result = checkEligibility([candidate], 79_999, 10_000);
+  expect(result.eligible.map(c => c.id)).toEqual(["with-budget"]);
+  const tight = checkEligibility([candidate], 80_001, 10_000);
+  expect(tight.rejected.map(r => r.candidate.id)).toEqual(["with-budget"]);
+});
+
+test("eligibility: unknown capacity is classified as unknown, not rejected", () => {
+  const noCapacity: Candidate = { tier: "fast", id: "unknown", description: "Unknown", efforts: ["low"] };
+  const partial: Candidate = { tier: "balanced", id: "partial", description: "Partial", efforts: ["medium"], capacity: {} };
+  const result = checkEligibility([noCapacity, partial], 100_000, 16_000);
+  expect(result.unknown.map(c => c.id)).toEqual(["unknown", "partial"]);
+  expect(result.eligible).toHaveLength(0);
+  expect(result.rejected).toHaveLength(0);
+});
+
+test("eligibility: no eligible candidate when all known capacities are too small", () => {
+  const a: Candidate = { tier: "fast", id: "a", description: "A", efforts: ["low"], capacity: { contextWindow: 50_000 } };
+  const b: Candidate = { tier: "balanced", id: "b", description: "B", efforts: ["medium"], capacity: { contextWindow: 100_000 } };
+  const result = checkEligibility([a, b], 200_000, 16_000);
+  expect(result.eligible).toHaveLength(0);
+  expect(result.rejected).toHaveLength(2);
+});
+
+test("eligibility: equal-window Codex candidates are all eligible", () => {
+  const equal: Candidate[] = [
+    { tier: "fast", id: "gpt-6-luna", description: "Luna", efforts: ["low", "medium", "high"], capacity: { contextWindow: 200_000 } },
+    { tier: "balanced", id: "gpt-6.1-sol", description: "Sol", efforts: ["low", "medium", "high"], capacity: { contextWindow: 200_000 } },
+    { tier: "strong", id: "gpt-6.1-sol", description: "Sol", efforts: ["low", "medium", "high"], capacity: { contextWindow: 200_000 } },
+  ];
+  const result = checkEligibility(equal, 100_000, 16_000);
+  expect(result.eligible).toHaveLength(3);
+  expect(result.rejected).toHaveLength(0);
+});
+
+test("candidatesFor populates capacity from catalog context_window", () => {
+  const catalog = new Map([
+    ["gpt-6-luna", { slug: "gpt-6-luna", display_name: "Luna", context_window: 200_000, supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }] }],
+    ["gpt-6.1-sol", { slug: "gpt-6.1-sol", display_name: "Sol", context_window: 1_000_000, supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] }],
+  ]);
+  const result = candidatesFor(configFromEnv({}), catalog as any);
+  const luna = result.find(c => c.tier === "fast")!;
+  const sol = result.find(c => c.tier === "balanced")!;
+  expect(luna.capacity).toEqual({ contextWindow: 200_000 });
+  expect(sol.capacity).toEqual({ contextWindow: 1_000_000 });
+});
+
+test("candidatesFor without catalog context_window has undefined capacity", () => {
+  const result = candidatesFor(configFromEnv({}), new Map());
+  expect(result[0].capacity).toBeUndefined();
+});
+
+test("eligibility: exact boundary (requiredContext === usable) is eligible", () => {
+  const candidate: Candidate = { tier: "fast", id: "exact", description: "Exact", efforts: ["low"], capacity: { contextWindow: 100_000, outputBudget: 20_000 } };
+  const result = checkEligibility([candidate], 80_000, 10_000);
+  expect(result.eligible.map(c => c.id)).toEqual(["exact"]);
+  expect(result.rejected).toHaveLength(0);
+});
+
+test("eligibility: mixed eligible, rejected, and unknown in one call", () => {
+  const small: Candidate = { tier: "fast", id: "small", description: "Small", efforts: ["low"], capacity: { contextWindow: 50_000 } };
+  const large: Candidate = { tier: "balanced", id: "large", description: "Large", efforts: ["medium"], capacity: { contextWindow: 500_000 } };
+  const noInfo: Candidate = { tier: "strong", id: "noinfo", description: "Unknown", efforts: ["high"] };
+  const result = checkEligibility([small, large, noInfo], 100_000, 16_000);
+  expect(result.eligible.map(c => c.id)).toEqual(["large"]);
+  expect(result.rejected.map(r => r.candidate.id)).toEqual(["small"]);
+  expect(result.unknown.map(c => c.id)).toEqual(["noinfo"]);
+});
+
+test("eligibility: contextWindow 0 is classified as unknown", () => {
+  const candidate: Candidate = { tier: "fast", id: "zero", description: "Zero", efforts: ["low"], capacity: { contextWindow: 0 } };
+  const result = checkEligibility([candidate], 1000, 500);
+  expect(result.unknown.map(c => c.id)).toEqual(["zero"]);
+  expect(result.eligible).toHaveLength(0);
+  expect(result.rejected).toHaveLength(0);
 });

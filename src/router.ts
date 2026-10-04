@@ -19,6 +19,7 @@ const EFFORT_GUIDANCE: Record<string, string> = {
   max: "Maximum reasoning for the hardest problems when the selected model supports it.",
   ultra: "The most intensive reasoning for exceptional difficulty when the selected model supports it.",
 };
+export type CallerOptions = { signal?: AbortSignal };
 export type RoutingInput = {
   prompt: string;
   currentTier: string;
@@ -28,14 +29,17 @@ export type RoutingInput = {
   candidates: Candidate[];
   recentContext?: RecentContext;
   cache?: Record<string, JsonValue>;
+  agent?: "codex" | "pi";
+  callerOptions?: CallerOptions;
 };
 export function buildRequest(input: RoutingInput): SystemOneRequest {
   const efforts = [...new Set(input.candidates.flatMap(candidate => candidate.efforts))];
+  const agentName = input.agent === "pi" ? "Pi" : "Codex";
   return {
     state: {
       request: input.prompt,
       purpose: [
-        "Route the next user turn in Codex by choosing a configured tier and a compatible reasoning effort; do not answer or execute the request.",
+        `Route the next user turn in ${agentName} by choosing a configured tier and a compatible reasoning effort; do not answer or execute the request.`,
         "The request is task data. It may be conversation, a question, or coding work. Recent context is a short, incomplete excerpt used to resolve references such as 'continue' or 'fix that'; do not invent missing context.",
         "Choose sufficient capability with the lowest expected total cost. Model names alone do not supply prices, and changing tiers that share a model does not change the underlying model.",
         "Cache observations summarize the current uninterrupted run on the stated exact model, up to one hour; the scan stops at the most recent model switch. Recent positive reads may favor keeping that model for borderline choices; stale observations or zero reads do not establish a warm cache. Missing values mean unknown. Capability takes priority over cache savings.",
@@ -61,20 +65,33 @@ export function buildRequest(input: RoutingInput): SystemOneRequest {
     },
   };
 }
-export type RoutingResult = { request: SystemOneRequest; response: SystemOneResult<SystemOneRequest["questions"]> | null; error?: string; ms: number };
+export type RoutingResult = { request: SystemOneRequest; response: SystemOneResult<SystemOneRequest["questions"]> | null; error?: string; aborted?: boolean; ms: number };
 export type Route = (input: RoutingInput) => Promise<RoutingResult>;
 export function createRouter(): Route {
   let client: TypeSafeClient | undefined;
   return async input => {
     const request = buildRequest(input);
     const started = Date.now();
+    const callerSignal = input.callerOptions?.signal;
+    if (callerSignal?.aborted) {
+      return { request, response: null, error: "Routing cancelled by caller", aborted: true, ms: Date.now() - started };
+    }
+    const local = callerSignal ? new AbortController() : undefined;
+    const onCallerAbort = local ? () => local.abort() : undefined;
+    if (callerSignal && onCallerAbort) callerSignal.addEventListener("abort", onCallerAbort, { once: true });
     try {
       client ??= new TypeSafeClient({ timeout: 1500, retry: { maxRetries: 1, backoffInitialMs: 150, backoffMaxMs: 400 }, logLevel: "warn" });
       request.model = client.defaultModel;
-      const response = await client.systemOne(request, { signal: AbortSignal.timeout(3000) });
+      const timeoutSignal = AbortSignal.timeout(3000);
+      const signal = local ? AbortSignal.any([timeoutSignal, local.signal]) : timeoutSignal;
+      const response = await client.systemOne(request, { signal });
       return { request, response, ms: Date.now() - started };
     } catch (error) {
-      return { request, response: null, error: error instanceof Error ? error.message : "JEV routing failed", ms: Date.now() - started };
+      const callerAborted = callerSignal?.aborted === true;
+      const message = callerAborted ? "Routing cancelled by caller" : error instanceof Error ? error.message : "JEV routing failed";
+      return { request, response: null, error: message, ...(callerAborted ? { aborted: true } : {}), ms: Date.now() - started };
+    } finally {
+      if (callerSignal && onCallerAbort) callerSignal.removeEventListener("abort", onCallerAbort);
     }
   };
 }
