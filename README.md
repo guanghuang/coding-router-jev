@@ -6,6 +6,24 @@ A TypeScript/Bun wrapper that routes Codex user turns through JEV. The command i
 
 All installation paths require the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
 
+## Distribution
+
+The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout.
+
+The repository is currently **private**. Installation commands that fetch raw files from `raw.githubusercontent.com` or download release assets without authentication will fail until the repository is made public. The sections below label each command as **Private repository** or **Public repository (once public)** so you can tell at a glance which commands work today.
+
+**Private repository authentication:** `install.sh` and `install.ps1` attach `Authorization` only when **`GH_TOKEN` is set in the environment**. They do not read the GitHub CLI credential store. After `gh auth login`, export a token for the installer session:
+
+```sh
+export GH_TOKEN="$(gh auth token)"   # macOS/Linux
+```
+
+```powershell
+$env:GH_TOKEN = gh auth token        # Windows PowerShell
+```
+
+Use a fine-grained or classic PAT with read access to this repository and its releases if you do not use the GitHub CLI. `GH_TOKEN` is used only for in-process HTTP requests; the installers never write it to disk or to `~/.coding-router-jev.env`.
+
 ## Install from release (recommended)
 
 Download a prebuilt standalone binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases). No Bun installation required.
@@ -20,24 +38,46 @@ The `install.sh` script detects your OS and architecture, downloads the correct 
 curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
 ```
 
+Prefer [download and review](#download-and-review-before-executing-macoslinux) or pin a release tag instead of piping `main` blindly.
+
 **Private repository (requires authentication):**
 
 ```sh
-# Option 1: Set GH_TOKEN and run locally
-curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
-GH_TOKEN=ghp_your_token sh install.sh
-
-# Option 2: Clone and run from source checkout
-git clone https://github.com/guanghuang/coding-router-jev.git
-GH_TOKEN=ghp_your_token sh coding-router-jev/install.sh
+# Recommended: clone with gh, then install from the checkout
+gh auth login
+gh repo clone guanghuang/coding-router-jev
+export GH_TOKEN="$(gh auth token)"
+sh coding-router-jev/install.sh
 ```
 
-**Download and review before executing:**
+```sh
+# Alternative: download install.sh with an authenticated request, then run
+export GH_TOKEN="ghp_your_token"
+curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
+  https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
+sh install.sh
+unset GH_TOKEN
+```
+
+#### Download and review before executing (macOS/Linux)
+
+**Public repository (once public):**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
 less install.sh      # review the script
 sh install.sh        # run after review
+```
+
+**Private repository (requires authentication):**
+
+```sh
+export GH_TOKEN="$(gh auth token)"
+curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
+  https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
+less install.sh
+sh install.sh
+unset GH_TOKEN
 ```
 
 #### Installer flags (macOS/Linux)
@@ -47,7 +87,7 @@ sh install.sh        # run after review
 | `--version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `--dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `~/.local/bin`). Use an absolute path; `~` is not expanded. |
 | `--help` | — | Show usage |
-| — | `GH_TOKEN` | GitHub token for private repository access |
+| — | `GH_TOKEN` | GitHub token for private release/API access (process environment only; not saved by the installer) |
 
 **Version pinning and rollback:**
 
@@ -74,6 +114,10 @@ rm ~/.local/bin/codex-jev    # or your custom --dir path
 
 The installer never modifies `~/.coding-router-jev.env` or shell startup files. When the install directory is not in your `PATH`, the script prints the export command to add. Repeating the install upgrades the binary without accumulating `PATH` entries.
 
+#### Upgrade and configuration preservation (macOS/Linux)
+
+Re-running `install.sh` (with or without `--version`) replaces only the `codex-jev` binary. Your configuration file (`~/.coding-router-jev.env`) and any shell startup changes you made are never touched. To upgrade to the latest release, run the same installer command you used originally. To pin or roll back, pass `--version`.
+
 ### One-command installer (Windows)
 
 The `install.ps1` PowerShell script downloads the Windows x64 binary, verifies its SHA-256 checksum, and installs it to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
@@ -84,26 +128,47 @@ The `install.ps1` PowerShell script downloads the Windows x64 binary, verifies i
 irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
 ```
 
+Prefer [download and review](#download-and-review-before-executing-windows) when you want to inspect the script first.
+
 **Private repository (requires authentication):**
 
 ```powershell
-# Option 1: Set GH_TOKEN and run
-$env:GH_TOKEN = "ghp_your_token"
-irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
-.\install.ps1
-
-# Option 2: Clone and run from source checkout
-git clone https://github.com/guanghuang/coding-router-jev.git
-$env:GH_TOKEN = "ghp_your_token"
+# Recommended: clone with gh, then install from the checkout
+gh auth login
+gh repo clone guanghuang/coding-router-jev
+$env:GH_TOKEN = gh auth token
 .\coding-router-jev\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 ```
 
-**Download and review before executing:**
+```powershell
+# Alternative: download install.ps1 with an authenticated request
+$env:GH_TOKEN = "ghp_your_token"
+$headers = @{ Authorization = "token $env:GH_TOKEN" }
+Invoke-RestMethod -Uri "https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1" -Headers $headers -OutFile install.ps1
+.\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+```
+
+#### Download and review before executing (Windows)
+
+**Public repository (once public):**
 
 ```powershell
 irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
 Get-Content install.ps1   # review the script
 .\install.ps1              # run after review
+```
+
+**Private repository (requires authentication):**
+
+```powershell
+$env:GH_TOKEN = gh auth token
+$headers = @{ Authorization = "token $env:GH_TOKEN" }
+Invoke-RestMethod -Uri "https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1" -Headers $headers -OutFile install.ps1
+Get-Content install.ps1
+.\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 ```
 
 #### Installer flags (Windows)
@@ -113,7 +178,7 @@ Get-Content install.ps1   # review the script
 | `-Version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `-Dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `$env:LOCALAPPDATA\coding-router-jev\bin`) |
 | `-Help` | — | Show usage |
-| — | `GH_TOKEN` | GitHub token for private repository access |
+| — | `GH_TOKEN` | GitHub token for private release/API access (process environment only; not saved by the installer) |
 
 **Version pinning and rollback:**
 
@@ -135,14 +200,20 @@ Get-Content install.ps1   # review the script
 
 ```powershell
 Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev.exe"
-# ~/.coding-router-jev.env is yours to keep or remove
+# %USERPROFILE%\.coding-router-jev.env is yours to keep or remove
 ```
 
 The installer adds the install directory to the user `PATH` (not the system `PATH`) without administrator privileges and without duplicate entries. The binary is available in the current session immediately; open a new terminal for other shells to pick it up. The installer never modifies `~/.coding-router-jev.env`. If a running `codex-jev.exe` locks the existing binary, the installer reports an actionable error.
 
-> **Note:** The binary is unsigned. Windows SmartScreen may prompt on first run. This is expected for unsigned executables distributed outside the Windows Store.
+#### Upgrade and configuration preservation (Windows)
+
+Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.exe`. Your configuration file (`~/.coding-router-jev.env`, which on Windows resolves to `%USERPROFILE%\.coding-router-jev.env`) and user `PATH` entries are preserved. If the existing binary is locked by a running process, the installer will report an error — close `codex-jev` first, then retry.
+
+> **Note:** The binary is unsigned. Windows SmartScreen may display a "Windows protected your PC" dialog on first run. Click **More info → Run anyway**. This is expected for unsigned executables distributed outside the Windows Store. The installer itself runs within PowerShell and does not trigger SmartScreen.
 
 ### Manual download
+
+While the repository is **private**, run `gh auth login` first so `gh release download` can access assets. After the repository is public, the same commands work without extra setup.
 
 ```sh
 # Download the latest release (requires gh CLI and repository access)
@@ -171,12 +242,41 @@ sha256sum --check SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
 
 Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; macOS Gatekeeper may require `xattr -d com.apple.quarantine codex-jev-darwin-*` after download.
 
-## Install from source (Bun required)
+**Unsigned binary details by platform:**
 
-Running from source requires [Bun](https://bun.sh/).
+- **macOS**: Gatekeeper blocks unsigned binaries by default. After downloading, run `xattr -d com.apple.quarantine codex-jev-darwin-*` to remove the quarantine attribute. Alternatively, right-click the binary in Finder and choose **Open** to add a one-time exception.
+- **Windows**: SmartScreen displays a warning on first run. Click **More info → Run anyway**. The `install.ps1` installer does not trigger SmartScreen because it runs within PowerShell.
+- **Linux**: No code-signing enforcement. glibc is required; the installer detects musl/Alpine and exits with a clear error.
+
+**Expected platform targets** (installers do not enforce OS version checks; unsupported combinations may fail at runtime):
+
+| Platform | Target | Notes |
+| --- | --- | --- |
+| macOS (ARM64) | Apple Silicon | Prefer `codex-jev-darwin-arm64` |
+| macOS (x64) | Intel Macs; Apple Silicon via Rosetta 2 | Use `codex-jev-darwin-x64` only when you need the Intel build |
+| Linux (x64) | glibc Linux, SSE4.2 | Release workflow smoke-tests the x64 binary on `ubuntu-latest` |
+| Linux (ARM64) | glibc Linux | Cross-compiled in CI; not yet run on ARM64 hardware |
+| Windows (x64) | Windows 10+ x64 | Native x64 only; ARM64 not supported |
+
+## Run (release install)
+
+After installing a release binary, use `codex-jev` like the Codex CLI:
 
 ```sh
-git clone https://github.com/guanghuang/coding-router-jev.git
+codex-jev --help
+codex-jev exec "explain this repository"
+codex-jev resume --last
+```
+
+Configure routing via `~/.coding-router-jev.env` (see [Configuration](#configuration)). `--help` and `--version` reflect the underlying Codex CLI.
+
+## Install from source (Bun required)
+
+Running from source requires [Bun](https://bun.sh/). While the repository is **private**, clone with `gh repo clone guanghuang/coding-router-jev` after `gh auth login` instead of anonymous `git clone`.
+
+```sh
+gh auth login   # private repository only
+gh repo clone guanghuang/coding-router-jev
 cd coding-router-jev
 bun install
 ```
@@ -236,6 +336,8 @@ Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and st
 ## Configuration
 
 Precedence is process environment, then `~/.coding-router-jev.env`, then built-in defaults. Bun may also load a working-directory `.env` into the process environment. All example values in `.env.example` are commented out, so copying the example does not override defaults.
+
+On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), so the configuration file is `%USERPROFILE%\.coding-router-jev.env`. On **macOS and Linux**, it is `$HOME/.coding-router-jev.env`. The file format is the same on all platforms.
 
 | Variable | Default / purpose |
 | --- | --- |
@@ -364,6 +466,110 @@ git push origin v0.2.0
 The `.github/workflows/release.yml` workflow validates, cross-compiles, and publishes release assets. The tag version must match `package.json`. Trigger `workflow_dispatch` manually to test the build pipeline without publishing — the version-tag check is skipped and the release job runs only on tag push.
 
 Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
+
+### Installer verification status
+
+**Automated (CI / unit tests):** `install.sh` and `install.ps1` flows — download, checksum verification, version pinning, upgrade replace, auth with `GH_TOKEN`, config file preservation, and error handling — are covered by `test/install.test.ts` and `test/install-windows.test.ts`. Release workflow smoke-tests the Linux x64 binary.
+
+**Manually verified:**
+
+- **macOS (ARM64 and x64)**: End-to-end `install.sh`, PATH guidance, Gatekeeper quarantine removal.
+- **Linux (x64)**: End-to-end `install.sh` on Ubuntu 22.04.
+- **Windows (x64)**: End-to-end `install.ps1`, user PATH updates, SmartScreen on first binary run, locked-binary error when the executable is in use.
+
+**Not yet verified:**
+
+- Linux ARM64 on physical hardware (CI cross-compiles only).
+- Interactive multi-turn routing sessions on all platforms (verified locally on macOS only).
+- ChatGPT desktop or Work integration (not implemented; not advertised).
+
+## Troubleshooting
+
+### "codex: command not found" or "codex-jev starts but cannot find Codex"
+
+The Codex CLI (`codex`) must be installed and authenticated separately. `codex-jev` is a routing wrapper, not a replacement for Codex. Install Codex from [github.com/openai/codex](https://github.com/openai/codex), run `codex auth`, and confirm `codex --help` works before using `codex-jev`.
+
+### "Do I need Bun?"
+
+**No**, if you use a prebuilt binary from [GitHub Releases](https://github.com/guanghuang/coding-router-jev/releases) or an installer (`install.sh` / `install.ps1`). Bun is only required for [source installation](#install-from-source-bun-required) or local development.
+
+### PATH collisions — wrong `codex-jev` is found
+
+If `which codex-jev` (or `Get-Command codex-jev` on Windows) prints a different path than expected:
+
+```sh
+# macOS/Linux — check all locations
+which -a codex-jev
+
+# Windows PowerShell
+Get-Command codex-jev -All
+```
+
+Ensure the installer's directory appears **before** the conflicting directory in your `PATH`. The macOS/Linux installer prints the required `export` command when the directory is not in `PATH`. The Windows installer adds the directory automatically but a new terminal may be needed.
+
+### Unsupported architecture or OS
+
+Installers print explicit errors such as `Alpine Linux (musl) is not supported`, `musl libc detected`, `unsupported operating system`, `unsupported architecture`, or (Windows) `Windows ARM64 is not supported`. Use a supported OS/architecture from the [platform support](#platform-support) table.
+
+### Checksum verification failure
+
+If `sha256sum --check SHA256SUMS` fails or the installer reports `checksum mismatch`, `no checksum found for`, or `no SHA-256 tool found`:
+
+1. Re-download the binary and `SHA256SUMS` from the same release tag.
+2. Ensure you did not mix assets from different releases.
+3. If the mismatch persists, the download may have been corrupted in transit. Try a different network or download method (`gh release download` vs. direct URL).
+
+### Authentication errors (private repository)
+
+While the repository is private, release downloads and (when not using a local checkout) raw script fetches require authentication. Set `GH_TOKEN` before running the installer:
+
+```sh
+export GH_TOKEN="$(gh auth token)"
+sh install.sh
+unset GH_TOKEN
+```
+
+```powershell
+$env:GH_TOKEN = gh auth token
+.\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+```
+
+Look for `authorization failed while trying to` in installer output. `gh auth login` alone is not enough unless you export `GH_TOKEN` as above. If downloads of `install.sh` / `install.ps1` from `raw.githubusercontent.com` fail with 404/401, use `gh repo clone` or an authenticated `curl`/`Invoke-RestMethod` fetch (see the **Private repository (requires authentication)** install sections above). Prefer cloning a release tag and running `install.sh` from that checkout when you want the installer script pinned to a version.
+
+Verify your token can read this repository and its releases (fine-grained read access to contents and releases is preferred over broad classic `repo` scope). Avoid prefix assignments like `GH_TOKEN=… sh install.sh` — they expose the token in process listings and shell history.
+
+### Release not found / unavailable
+
+- Verify releases exist at [github.com/guanghuang/coding-router-jev/releases](https://github.com/guanghuang/coding-router-jev/releases).
+- When pinning a version (`--version v0.1.0`), ensure the tag exists.
+- Unix installers may report `release not found while trying to download …`; Windows may report `release asset not found: codex-jev-windows-x64.exe for …`.
+- The `workflow_dispatch` trigger builds but does not publish a release; only tag pushes create releases.
+
+### Windows install or upgrade errors
+
+- **`cannot replace … The file may be in use`**: Close any running `codex-jev` process and retry.
+- **`upgrade failed; previous installation restored`**: The new binary could not replace the old one; free the file lock and reinstall.
+- **`upgrade failed and restore failed`**: Rename the `.exe.old` backup next to `codex-jev.exe` manually if needed.
+- **`failed to install binary to`**: Check disk space and permissions under your install directory (`-Dir` / `$env:LOCALAPPDATA\coding-router-jev\bin` by default).
+
+### macOS Gatekeeper blocks the binary
+
+After downloading a prebuilt binary outside an installer:
+
+```sh
+xattr -d com.apple.quarantine codex-jev-darwin-*
+```
+
+Or right-click the binary in Finder and choose **Open** to create a one-time exception.
+
+### Windows SmartScreen blocks the binary
+
+SmartScreen may show "Windows protected your PC" on first run. Click **More info → Run anyway**. This is expected for unsigned executables.
+
+### Routing history log location
+
+Session logs are written to `${TMPDIR:-/tmp}/coding-router-jev/` on macOS/Linux. On Windows, the equivalent `%TEMP%` directory is used. Logs contain user prompts — treat them as confidential.
 
 ## Attribution
 
