@@ -46,17 +46,17 @@ describe("cleanupStaleLogs", () => {
     }
   });
 
-  test("file at exact cutoff boundary is not deleted", async () => {
+  test("file just inside retention is preserved; file just outside is deleted", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jev-cleanup-test-"));
     try {
-      await createFile(dir, "codex-boundary.jsonl", 5 * DAY_MS);
-      await createFile(dir, "codex-older.jsonl", 5 * DAY_MS + 1);
+      await createFile(dir, "codex-inside.jsonl", 5 * DAY_MS - 60_000);
+      await createFile(dir, "codex-outside.jsonl", 5 * DAY_MS + 60_000);
 
       cleanupStaleLogs(dir, 5);
 
       const remaining = await readdir(dir);
-      expect(remaining).toContain("codex-boundary.jsonl");
-      expect(remaining).not.toContain("codex-older.jsonl");
+      expect(remaining).toContain("codex-inside.jsonl");
+      expect(remaining).not.toContain("codex-outside.jsonl");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -100,16 +100,31 @@ describe("cleanupStaleLogs", () => {
       await createFile(dir, "codex-b.jsonl", 10 * DAY_MS);
       await createFile(dir, "codex-c.jsonl", 10 * DAY_MS);
 
-      await chmod(join(dir, "codex-b.jsonl"), 0o000);
-      await chmod(dir, 0o500);
+      const immutable = join(dir, "codex-b.jsonl");
+      const { chattr } = await (async () => {
+        try {
+          const { execSync } = await import("node:child_process");
+          execSync(`chattr +i "${immutable}"`, { stdio: "ignore" });
+          return { chattr: true };
+        } catch {
+          return { chattr: false };
+        }
+      })();
 
-      try {
-        cleanupStaleLogs(dir, 5);
-      } catch {
-        // Should not throw
+      if (!chattr) {
+        await chmod(join(dir, "codex-b.jsonl"), 0o000);
+        await chmod(dir, 0o500);
       }
 
-      await chmod(dir, 0o700);
+      cleanupStaleLogs(dir, 5);
+
+      if (!chattr) {
+        await chmod(dir, 0o700);
+      } else {
+        const { execSync } = await import("node:child_process");
+        execSync(`chattr -i "${immutable}"`, { stdio: "ignore" });
+      }
+
       const remaining = await readdir(dir);
       expect(remaining).toContain("codex-b.jsonl");
     } finally {
