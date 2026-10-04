@@ -1,16 +1,18 @@
 # Coding Router Jev
 
-A TypeScript/Bun project that routes coding-agent user turns through JEV (the TypeSafe classifier). The `codex-jev` command wraps the Codex CLI; the Pi extension registers a `jev/auto` virtual model so Pi selects physical models and thinking levels automatically.
+A TypeScript/Bun project that routes coding-agent user turns through JEV (the TypeSafe classifier). The `codex-jev` command wraps the Codex CLI; the `claude-jev` command wraps the Claude Code CLI; the Pi extension registers a `jev/auto` virtual model so Pi selects physical models and thinking levels automatically.
 
 ## Prerequisites
 
 **Codex** — The `codex-jev` launcher requires the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
 
+**Claude Code** — The `claude-jev` launcher requires the Claude Code CLI (`claude`) installed and authenticated separately through a supported direct Anthropic login or native Claude authentication. The router does not bundle or install Claude Code. See [Claude prerequisites](#claude-prerequisites) for details.
+
 **Pi** — The Pi extension requires `@earendil-works/pi-coding-agent` ≥ 1.0.2 and `@earendil-works/pi-ai` (declared as optional peer dependencies). Pi manages these packages; you do not install them manually. Node ≥ 22.19.0 is required by the Node package; Pi distributions that supply their own runtime do not require a separate Node installation.
 
 ## Distribution
 
-The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout.
+The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout. Each release includes binaries for `codex-jev`, `claude-jev`, and `jev-logs` for all supported platforms.
 
 The repository is currently **private**. Installation commands that fetch raw files from `raw.githubusercontent.com` or download release assets without authentication will fail until the repository is made public. The sections below label each command as **Private repository** or **Public repository (once public)** so you can tell at a glance which commands work today.
 
@@ -32,7 +34,7 @@ Download a prebuilt standalone binary from [GitHub Releases](https://github.com/
 
 ### One-command installer (macOS/Linux)
 
-The `install.sh` script detects your OS and architecture, downloads the correct binary, verifies its SHA-256 checksum, and places it in `~/.local/bin`. No sudo required.
+The `install.sh` script detects your OS and architecture, downloads the correct binaries for `codex-jev`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and places them in `~/.local/bin`. No sudo required.
 
 **Public repository (once public):**
 
@@ -110,19 +112,20 @@ sh install.sh --dir /opt/bin
 **Uninstall (macOS/Linux):**
 
 ```sh
-rm ~/.local/bin/codex-jev    # or your custom --dir path
+rm ~/.local/bin/codex-jev ~/.local/bin/claude-jev ~/.local/bin/jev-logs
+# or your custom --dir path
 # ~/.coding-router-jev.env is yours to keep or remove
 ```
 
-The installer never modifies `~/.coding-router-jev.env` or shell startup files. When the install directory is not in your `PATH`, the script prints the export command to add. Repeating the install upgrades the binary without accumulating `PATH` entries.
+The installer never modifies `~/.coding-router-jev.env` or shell startup files. When the install directory is not in your `PATH`, the script prints the export command to add. Repeating the install upgrades the binaries without accumulating `PATH` entries.
 
 #### Upgrade and configuration preservation (macOS/Linux)
 
-Re-running `install.sh` (with or without `--version`) replaces only the `codex-jev` binary. Your configuration file (`~/.coding-router-jev.env`) and any shell startup changes you made are never touched. To upgrade to the latest release, run the same installer command you used originally. To pin or roll back, pass `--version`.
+Re-running `install.sh` (with or without `--version`) replaces only the `codex-jev`, `claude-jev`, and `jev-logs` binaries. Your configuration file (`~/.coding-router-jev.env`) and any shell startup changes you made are never touched. To upgrade to the latest release, run the same installer command you used originally. To pin or roll back, pass `--version`.
 
 ### One-command installer (Windows)
 
-The `install.ps1` PowerShell script downloads the Windows x64 binary, verifies its SHA-256 checksum, and installs it to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
+The `install.ps1` PowerShell script downloads the Windows x64 binaries for `codex-jev`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and installs them to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
 
 **Public repository (once public):**
 
@@ -202,14 +205,16 @@ Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 
 ```powershell
 Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev.exe"
+Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\claude-jev.exe"
+Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\jev-logs.exe"
 # %USERPROFILE%\.coding-router-jev.env is yours to keep or remove
 ```
 
-The installer adds the install directory to the user `PATH` (not the system `PATH`) without administrator privileges and without duplicate entries. The binary is available in the current session immediately; open a new terminal for other shells to pick it up. The installer never modifies `~/.coding-router-jev.env`. If a running `codex-jev.exe` locks the existing binary, the installer reports an actionable error.
+The installer adds the install directory to the user `PATH` (not the system `PATH`) without administrator privileges and without duplicate entries. The binaries are available in the current session immediately; open a new terminal for other shells to pick it up. The installer never modifies `~/.coding-router-jev.env`. If a running `codex-jev.exe` or `claude-jev.exe` locks the existing binary, the installer reports an actionable error.
 
 #### Upgrade and configuration preservation (Windows)
 
-Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.exe`. Your configuration file (`~/.coding-router-jev.env`, which on Windows resolves to `%USERPROFILE%\.coding-router-jev.env`) and user `PATH` entries are preserved. If the existing binary is locked by a running process, the installer will report an error — close `codex-jev` first, then retry.
+Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.exe`, `claude-jev.exe`, and `jev-logs.exe`. Your configuration file (`~/.coding-router-jev.env`, which on Windows resolves to `%USERPROFILE%\.coding-router-jev.env`) and user `PATH` entries are preserved. If an existing binary is locked by a running process, the installer will report an error — close the process first, then retry.
 
 > **Note:** The binary is unsigned. Windows SmartScreen may display a "Windows protected your PC" dialog on first run. Click **More info → Run anyway**. This is expected for unsigned executables distributed outside the Windows Store. The installer itself runs within PowerShell and does not trigger SmartScreen.
 
@@ -241,6 +246,16 @@ sha256sum --check SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
 | `codex-jev-linux-arm64` | Linux | ARM64 | glibc required |
 | `codex-jev-linux-x64` | Linux | x64 | glibc, SSE4.2 minimum |
 | `codex-jev-windows-x64.exe` | Windows | x64 | Unsigned |
+| `claude-jev-darwin-arm64` | macOS | Apple Silicon | Unsigned |
+| `claude-jev-darwin-x64` | macOS | Intel | Unsigned |
+| `claude-jev-linux-arm64` | Linux | ARM64 | glibc required |
+| `claude-jev-linux-x64` | Linux | x64 | glibc, SSE4.2 minimum |
+| `claude-jev-windows-x64.exe` | Windows | x64 | Unsigned |
+| `jev-logs-darwin-arm64` | macOS | Apple Silicon | Unsigned |
+| `jev-logs-darwin-x64` | macOS | Intel | Unsigned |
+| `jev-logs-linux-arm64` | Linux | ARM64 | glibc required |
+| `jev-logs-linux-x64` | Linux | x64 | glibc, SSE4.2 minimum |
+| `jev-logs-windows-x64.exe` | Windows | x64 | Unsigned |
 
 Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; macOS Gatekeeper may require `xattr -d com.apple.quarantine codex-jev-darwin-*` after download.
 
@@ -350,7 +365,84 @@ codex-jev exec "explain this repository"
 codex-jev resume --last
 ```
 
-Configure routing via `~/.coding-router-jev.env` (see [Configuration](#configuration)). `--help` and `--version` reflect the underlying Codex CLI.
+Use `claude-jev` like the Claude Code CLI:
+
+```sh
+claude-jev --help
+claude-jev --print "explain this repository"
+```
+
+Configure routing via `~/.coding-router-jev.env` (see [Configuration](#configuration)). `--help` and `--version` reflect the underlying CLI for each launcher.
+
+## Claude prerequisites
+
+### Claude Code CLI
+
+The `claude-jev` launcher requires the Claude Code CLI (`claude`) installed and authenticated. Install Claude Code from [code.claude.com](https://code.claude.com) or via npm:
+
+```sh
+npm install -g @anthropic-ai/claude-code
+```
+
+Authenticate using a supported method:
+- **Direct Anthropic login** — run `claude` and follow the interactive authentication flow. This authenticates with Anthropic directly using your Anthropic account.
+- **API key** — set `ANTHROPIC_API_KEY` in your environment for API-key based access.
+
+The `claude-jev` launcher does **not** authenticate with Anthropic on your behalf. It uses the existing Claude Code authentication to forward requests. The `TYPESAFE_API_KEY` is a separate credential for JEV classification only and is never sent to Anthropic.
+
+### How claude-jev works
+
+Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and starts ordinary Claude Code. With the key, it starts a local proxy on `127.0.0.1` at an OS-assigned port, sets `ANTHROPIC_BASE_URL` to route traffic through the proxy, and launches Claude Code with temporary provider settings. The proxy intercepts Messages API requests, classifies each new user turn through JEV, selects a model/tier/effort, and forwards the request to the Anthropic API.
+
+Key behaviors:
+- **Statusline preservation**: `claude-jev` does not inject assistant notices into Claude's stream. Routing feedback is delivered through Claude's native `statusLine` display when configured.
+- **Session-local plugin**: The launcher generates a temporary Claude plugin directory with the `jev-logs` skill and passes it via `--plugin-dir`. The plugin is scoped to the current session and is not installed globally. Use `/claude-jev:jev-logs` to query routing decisions.
+- **Opt-out**: Set `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL=false` to disable the jev-logs plugin.
+- **No unsupported transports**: Bedrock and Vertex AI base URLs are rejected with an explicit error. Use the native Claude CLI directly for those providers.
+
+### Claude model configuration
+
+| Variable | Default |
+| --- | --- |
+| `CODING_ROUTER_FAST_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
+| `CODING_ROUTER_BALANCED_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
+| `CODING_ROUTER_STRONG_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
+| `CODING_ROUTER_LONG_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
+| `CODING_ROUTER_CONTEXT_WINDOW_CLAUDE` | Unset (uses model physical capacity) |
+
+`_MODEL_CLAUDE` variables accept exact Anthropic model IDs. The router looks up each model in its known-model table for context window, output budget, and thinking mode. Unknown model IDs are used as-is but without capacity enforcement or effort normalization.
+
+Set `CODING_ROUTER_CONTEXT_WINDOW_CLAUDE` to a positive integer to override the virtual context window for all Claude candidates. The override cannot exceed a model's physical capacity — it is clamped to `min(override, physical)`.
+
+### Claude thinking and effort
+
+Claude models support different thinking modes:
+
+| Model | Thinking mode | Supported efforts |
+| --- | --- | --- |
+| `claude-haiku-4-5-*` | Budgeted | None (budget-only) |
+| `claude-sonnet-4-*`, `claude-sonnet-4-5-*` | Adaptive | low, medium, high |
+| `claude-sonnet-5-5`, `claude-opus-5-5` | Adaptive | low, medium, high, xhigh, max |
+| `claude-fable-5-1` | Adaptive | low, medium, high, xhigh, max |
+
+For adaptive-thinking models, JEV selects an effort level and the proxy sets `output_config.effort` on the request. The effort is normalized: if JEV selects an effort higher than the model supports, the highest supported level is used. If JEV confidence is below the threshold, the current effort or model default is kept.
+
+Budgeted-thinking models (Haiku) do not support adaptive effort. The proxy strips any incompatible `output_config.effort` fields for these models.
+
+### Claude session lifecycle
+
+- **Routing state is in-memory**: tier, model, effort, and cache observations reset on process restart.
+- **Resume and /clear**: `claude-jev` forwards all Claude Code arguments. Resume and clear are Claude Code features; the router does not manage sessions.
+- **Concurrent launches**: Each `claude-jev` process starts its own proxy on a unique port. Multiple concurrent sessions do not share routing state.
+
+### Claude unsupported modes
+
+- **Bedrock / Vertex AI**: Setting `ANTHROPIC_UPSTREAM_URL` or `ANTHROPIC_BASE_URL` to an AWS Bedrock or Google Vertex endpoint causes `claude-jev` to exit with an error. Use the native Claude CLI for these transports.
+- **Cloud transport**: The proxy routes through the direct Anthropic Messages API only. Other transport modes are not supported.
+
+### Reverting to ordinary Claude
+
+Running `claude` directly (without `claude-jev`) returns to normal Claude Code behavior. No global settings, skills, or paid-provider switches need to be undone. The session-local plugin directory is cleaned up when `claude-jev` exits.
 
 ## Install from source (Bun required)
 
@@ -405,11 +497,13 @@ For prebuilt binaries, see [Install from release](#install-from-release-recommen
 ```sh
 bun run build
 ./dist/codex-jev
+./dist/claude-jev
+./dist/jev-logs /path/to/session.jsonl --last 3
 ```
 
-The compiled launcher still requires the separately installed and authenticated Codex CLI.
+The compiled launchers still require the separately installed and authenticated Codex CLI or Claude Code CLI respectively.
 
-> **Note:** `codex-jev` forwards all arguments to Codex, so `--version` and `--help` identify the Codex CLI, not a dedicated router version.
+> **Note:** `codex-jev` forwards all arguments to Codex, so `--version` and `--help` identify the Codex CLI. Similarly, `claude-jev` forwards arguments to Claude Code.
 
 ## How it works
 
@@ -622,10 +716,10 @@ Default output is a concise human-readable summary with prompt preview, tier, mo
 
 ### Compiled installation
 
-The build script compiles `jev-logs` as a standalone binary alongside `codex-jev`. No Bun or Python required at runtime.
+The build script compiles `jev-logs` as a standalone binary alongside `codex-jev` and `claude-jev`. No Bun or Python required at runtime.
 
 ```sh
-bun run build   # produces dist/codex-jev and dist/jev-logs
+bun run build   # produces dist/codex-jev, dist/claude-jev, and dist/jev-logs
 ```
 
 ## Resume
@@ -779,15 +873,15 @@ The `jev-logs` skill is delivered by this package and is visible only when the p
 
 ## Compatibility
 
-| Platform | Codex (codex-jev) | Pi (jev/auto) | Notes |
-| --- | --- | --- | --- |
-| macOS (ARM64) | Binary + source | Git/local install | Codex tested end-to-end; Pi manifest validated in unit tests |
-| macOS (x64) | Binary + source | Git/local install | Codex tested end-to-end; Pi manifest validated in unit tests |
-| Linux (x64) | Binary + source | Git/local install | Codex tested on Ubuntu; Pi manifest validated in unit tests; glibc required |
-| Linux (ARM64) | Binary (cross-compiled) | Git/local install | Not yet tested on ARM64 hardware |
-| Windows (x64) | Binary + source | Git/local install | PowerShell paths; ARM64 not supported |
+| Platform | Codex (codex-jev) | Claude (claude-jev) | Pi (jev/auto) | Notes |
+| --- | --- | --- | --- | --- |
+| macOS (ARM64) | Binary + source | Binary + source | Git/local install | Codex tested end-to-end; Claude proxy validated in unit tests; Pi manifest validated in unit tests |
+| macOS (x64) | Binary + source | Binary + source | Git/local install | Codex tested end-to-end; Claude proxy validated in unit tests; Pi manifest validated in unit tests |
+| Linux (x64) | Binary + source | Binary + source | Git/local install | Codex tested on Ubuntu; Pi manifest validated in unit tests; glibc required |
+| Linux (ARM64) | Binary (cross-compiled) | Binary (cross-compiled) | Git/local install | Not yet tested on ARM64 hardware |
+| Windows (x64) | Binary + source | Binary + source | Git/local install | PowerShell paths; ARM64 not supported |
 
-Pi support requires `@earendil-works/pi-coding-agent` ≥ 1.0.2. Pi runtime installation and resource discovery are documented but not automated in CI; platform-specific smoke tests should be run manually. Claude adapter support is future work and does not ship with this release.
+Pi support requires `@earendil-works/pi-coding-agent` ≥ 1.0.2. Pi runtime installation and resource discovery are documented but not automated in CI; platform-specific smoke tests should be run manually.
 
 ## Attribution
 

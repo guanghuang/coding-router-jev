@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh — Install or upgrade codex-jev on macOS and Linux.
+# install.sh — Install or upgrade codex-jev, claude-jev, and jev-logs on macOS and Linux.
 #
 # Usage (public repository):
 #   curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
@@ -20,6 +20,8 @@ set -eu
 
 REPO="guanghuang/coding-router-jev"
 BINARY_NAME="codex-jev"
+CLAUDE_BINARY_NAME="claude-jev"
+JEV_LOGS_BINARY_NAME="jev-logs"
 
 # Guard against unset HOME early with a clear message.
 if [ -z "${HOME:-}" ]; then
@@ -68,7 +70,7 @@ parse_args() {
 
 show_help() {
   cat <<'HELP'
-Install or upgrade codex-jev.
+Install or upgrade codex-jev, claude-jev, and jev-logs.
 
 Usage:
   install.sh [OPTIONS]
@@ -84,16 +86,19 @@ Environment:
   INSTALL_DIR         Same as --dir
   GH_TOKEN            GitHub token for private repository access
 
-The installer downloads a prebuilt binary, verifies its SHA-256
-checksum, and places it in the install directory. It never modifies
-~/.coding-router-jev.env or shell startup files.
+The installer downloads prebuilt binaries for codex-jev, claude-jev,
+and jev-logs, verifies their SHA-256 checksums, and places them in the
+install directory. It never modifies ~/.coding-router-jev.env or shell
+startup files.
 
 Prerequisites:
-  The Codex CLI (codex) must be installed and authenticated separately.
+  codex-jev requires the Codex CLI (codex) installed and authenticated.
+  claude-jev requires the Claude Code CLI (claude) installed and authenticated.
 
 Uninstall:
-  rm ~/.local/bin/codex-jev   (or your custom --dir path)
-  The installer only manages the single binary; ~/.coding-router-jev.env
+  rm ~/.local/bin/codex-jev ~/.local/bin/claude-jev ~/.local/bin/jev-logs
+  (or your custom --dir path)
+  The installer only manages the binaries; ~/.coding-router-jev.env
   is yours to keep or remove.
 
 Rollback:
@@ -124,7 +129,9 @@ detect_platform() {
   fi
 
   ASSET_NAME="${BINARY_NAME}-${PLATFORM_OS}-${PLATFORM_ARCH}"
-  log "Detected platform: ${PLATFORM_OS}/${PLATFORM_ARCH} (asset: ${ASSET_NAME})"
+  CLAUDE_ASSET_NAME="${CLAUDE_BINARY_NAME}-${PLATFORM_OS}-${PLATFORM_ARCH}"
+  JEV_LOGS_ASSET_NAME="${JEV_LOGS_BINARY_NAME}-${PLATFORM_OS}-${PLATFORM_ARCH}"
+  log "Detected platform: ${PLATFORM_OS}/${PLATFORM_ARCH} (assets: ${ASSET_NAME}, ${CLAUDE_ASSET_NAME}, ${JEV_LOGS_ASSET_NAME})"
 }
 
 check_musl() {
@@ -261,10 +268,11 @@ The downloaded file may be corrupted or tampered with."
 install_binary() {
   _src="$1"
   _dest_dir="$2"
+  _name="$3"
 
   mkdir -p "$_dest_dir" || die "cannot create install directory: $_dest_dir"
 
-  _dest="${_dest_dir}/${BINARY_NAME}"
+  _dest="${_dest_dir}/${_name}"
 
   if [ -f "$_dest" ]; then
     log "Replacing existing installation at ${_dest}"
@@ -273,7 +281,7 @@ install_binary() {
   chmod +x "$_src" || die "cannot set executable permission on downloaded binary"
   mv "$_src" "$_dest" || die "failed to install binary to ${_dest}"
 
-  log "Installed ${BINARY_NAME} to ${_dest}"
+  log "Installed ${_name} to ${_dest}"
 }
 
 # ── PATH guidance ────────────────────────────────────────────────────────────
@@ -330,23 +338,30 @@ main() {
   resolve_version
 
   download_asset "$ASSET_NAME" "${TMPDIR_INSTALL}/${ASSET_NAME}"
+  download_asset "$CLAUDE_ASSET_NAME" "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}"
+  download_asset "$JEV_LOGS_ASSET_NAME" "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}"
   download_asset "SHA256SUMS" "${TMPDIR_INSTALL}/SHA256SUMS"
 
   verify_checksum "${TMPDIR_INSTALL}/${ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
+  verify_checksum "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
+  verify_checksum "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
 
-  install_binary "${TMPDIR_INSTALL}/${ASSET_NAME}" "$INSTALL_DIR"
+  install_binary "${TMPDIR_INSTALL}/${ASSET_NAME}" "$INSTALL_DIR" "$BINARY_NAME"
+  install_binary "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "$INSTALL_DIR" "$CLAUDE_BINARY_NAME"
+  install_binary "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "$INSTALL_DIR" "$JEV_LOGS_BINARY_NAME"
 
   print_path_help "$INSTALL_DIR"
 
   log ""
-  log "Done! Run '${BINARY_NAME} --help' to get started."
+  log "Done! Run '${BINARY_NAME} --help' or '${CLAUDE_BINARY_NAME} --help' to get started."
   log ""
   log "Prerequisites:"
-  log "  The Codex CLI (codex) must be installed and authenticated separately."
-  log "  See https://github.com/openai/codex for installation instructions."
+  log "  codex-jev requires the Codex CLI (codex) installed and authenticated separately."
+  log "  claude-jev requires Claude Code CLI (claude) installed and authenticated separately."
+  log "  See https://github.com/openai/codex and https://code.claude.com for installation."
   log ""
   log "Uninstall:"
-  log "  rm '${INSTALL_DIR}/${BINARY_NAME}'"
+  log "  rm '${INSTALL_DIR}/${BINARY_NAME}' '${INSTALL_DIR}/${CLAUDE_BINARY_NAME}' '${INSTALL_DIR}/${JEV_LOGS_BINARY_NAME}'"
 }
 
 main "$@"

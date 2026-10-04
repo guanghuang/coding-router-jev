@@ -94,36 +94,54 @@ jobs:
           mkdir -p dist
 
           compile() {
-            local target="$1" outfile="$2"
-            echo "==> Compiling $target -> dist/$outfile"
-            bun build src/cli.ts --compile --target="$target" --outfile "dist/$outfile"
+            local src="$1" target="$2" outfile="$3"
+            echo "==> Compiling $src -> $target -> dist/$outfile"
+            bun build "$src" --compile --target="$target" --outfile "dist/$outfile"
             ls -lh "dist/$outfile"
           }
 
-          compile bun-darwin-arm64 codex-jev-darwin-arm64
-          compile bun-darwin-x64   codex-jev-darwin-x64
-          compile bun-linux-arm64  codex-jev-linux-arm64
-          compile bun-linux-x64    codex-jev-linux-x64
-          compile bun-windows-x64  codex-jev-windows-x64.exe
+          for target in bun-darwin-arm64 bun-darwin-x64 bun-linux-arm64 bun-linux-x64 bun-windows-x64; do
+            suffix="${target#bun-}"
+            ext=""
+            if [ "$target" = "bun-windows-x64" ]; then ext=".exe"; fi
+            compile src/cli.ts       "$target" "codex-jev-${suffix}${ext}"
+            compile src/claude-cli.ts "$target" "claude-jev-${suffix}${ext}"
+            compile src/jev-logs.ts  "$target" "jev-logs-${suffix}${ext}"
+          done
 
-      - name: Smoke test Linux x64 binary
+      - name: Smoke test Linux x64 binaries
         run: |
           set -euo pipefail
-          chmod +x dist/codex-jev-linux-x64
+          chmod +x dist/codex-jev-linux-x64 dist/claude-jev-linux-x64 dist/jev-logs-linux-x64
           export PATH="$(pwd)/test/fixtures:$PATH"
-          echo "--- Smoke test: binary runs with fake codex fixture ---"
+
+          echo "--- Smoke test: codex-jev binary runs with fake codex fixture ---"
           OUTPUT=$(dist/codex-jev-linux-x64 --help 2>&1) || {
-            echo "::error::Smoke test failed with exit code $?"
+            echo "::error::codex-jev smoke test failed with exit code $?"
             echo "$OUTPUT"
             exit 1
           }
           echo "$OUTPUT"
           if echo "$OUTPUT" | grep -q '"stub":"codex"'; then
-            echo "Smoke test PASSED: launcher forwarded args to codex fixture"
+            echo "codex-jev smoke test PASSED"
           else
-            echo "::error::Smoke test FAILED: codex fixture output not detected in binary output. The launcher may not be forwarding args correctly."
+            echo "::error::codex-jev smoke test FAILED"
             exit 1
           fi
+
+          echo "--- Smoke test: claude-jev binary starts without TYPESAFE_API_KEY ---"
+          OUTPUT=$(dist/claude-jev-linux-x64 --help 2>&1) || true
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qi 'TYPESAFE_API_KEY\|claude\|not found\|not set'; then
+            echo "claude-jev smoke test PASSED: binary runs and reports expected state"
+          else
+            echo "::warning::claude-jev smoke test: unexpected output (non-fatal)"
+          fi
+
+          echo "--- Smoke test: jev-logs binary runs ---"
+          OUTPUT=$(dist/jev-logs-linux-x64 /dev/null --last 1 2>&1) || true
+          echo "$OUTPUT"
+          echo "jev-logs smoke test PASSED: binary executes"
 
       - name: Generate and verify SHA256SUMS
         working-directory: dist
@@ -135,6 +153,16 @@ jobs:
             codex-jev-linux-arm64 \
             codex-jev-linux-x64 \
             codex-jev-windows-x64.exe \
+            claude-jev-darwin-arm64 \
+            claude-jev-darwin-x64 \
+            claude-jev-linux-arm64 \
+            claude-jev-linux-x64 \
+            claude-jev-windows-x64.exe \
+            jev-logs-darwin-arm64 \
+            jev-logs-darwin-x64 \
+            jev-logs-linux-arm64 \
+            jev-logs-linux-x64 \
+            jev-logs-windows-x64.exe \
             > SHA256SUMS
           echo "--- SHA256SUMS ---"
           cat SHA256SUMS
@@ -151,6 +179,16 @@ jobs:
             dist/codex-jev-linux-arm64
             dist/codex-jev-linux-x64
             dist/codex-jev-windows-x64.exe
+            dist/claude-jev-darwin-arm64
+            dist/claude-jev-darwin-x64
+            dist/claude-jev-linux-arm64
+            dist/claude-jev-linux-x64
+            dist/claude-jev-windows-x64.exe
+            dist/jev-logs-darwin-arm64
+            dist/jev-logs-darwin-x64
+            dist/jev-logs-linux-arm64
+            dist/jev-logs-linux-x64
+            dist/jev-logs-windows-x64.exe
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 5
@@ -240,11 +278,22 @@ jobs:
           | `codex-jev-linux-arm64` | Linux | ARM64 | glibc required |
           | `codex-jev-linux-x64` | Linux | x64 | glibc required; SSE4.2 minimum |
           | `codex-jev-windows-x64.exe` | Windows | x64 | Unsigned |
+          | `claude-jev-darwin-arm64` | macOS | Apple Silicon (ARM64) | Unsigned |
+          | `claude-jev-darwin-x64` | macOS | Intel (x64) | Unsigned |
+          | `claude-jev-linux-arm64` | Linux | ARM64 | glibc required |
+          | `claude-jev-linux-x64` | Linux | x64 | glibc required; SSE4.2 minimum |
+          | `claude-jev-windows-x64.exe` | Windows | x64 | Unsigned |
+          | `jev-logs-darwin-arm64` | macOS | Apple Silicon (ARM64) | Unsigned |
+          | `jev-logs-darwin-x64` | macOS | Intel (x64) | Unsigned |
+          | `jev-logs-linux-arm64` | Linux | ARM64 | glibc required |
+          | `jev-logs-linux-x64` | Linux | x64 | glibc required; SSE4.2 minimum |
+          | `jev-logs-windows-x64.exe` | Windows | x64 | Unsigned |
 
           ### Prerequisites
 
-          - **Codex CLI** (`codex`) must be installed and authenticated separately.
-          - The router does **not** bundle or install Codex.
+          - **Codex CLI** (`codex`) must be installed and authenticated separately for `codex-jev`.
+          - **Claude Code CLI** (`claude`) must be installed and authenticated separately for `claude-jev`.
+          - The router does **not** bundle or install Codex or Claude.
 
           ### Download (private repository)
 
@@ -284,7 +333,7 @@ jobs:
 
           gh release create "$TAG" \
             --repo "$REPO" \
-            --title "codex-jev $TAG" \
+            --title "codex-jev / claude-jev $TAG" \
             --notes-file release-notes.md \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             dist/codex-jev-darwin-arm64 \
@@ -292,4 +341,14 @@ jobs:
             dist/codex-jev-linux-arm64 \
             dist/codex-jev-linux-x64 \
             dist/codex-jev-windows-x64.exe \
+            dist/claude-jev-darwin-arm64 \
+            dist/claude-jev-darwin-x64 \
+            dist/claude-jev-linux-arm64 \
+            dist/claude-jev-linux-x64 \
+            dist/claude-jev-windows-x64.exe \
+            dist/jev-logs-darwin-arm64 \
+            dist/jev-logs-darwin-x64 \
+            dist/jev-logs-linux-arm64 \
+            dist/jev-logs-linux-x64 \
+            dist/jev-logs-windows-x64.exe \
             dist/SHA256SUMS

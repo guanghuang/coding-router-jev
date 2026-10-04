@@ -145,6 +145,8 @@ describe("install.sh", () => {
     const { stdout, exitCode } = await runInstaller({}, ["--help"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Install or upgrade codex-jev");
+    expect(stdout).toContain("claude-jev");
+    expect(stdout).toContain("jev-logs");
     expect(stdout).toContain("--version");
     expect(stdout).toContain("--dir");
     expect(stdout).toContain("Uninstall");
@@ -237,6 +239,49 @@ describe("install.sh", () => {
       const combined = stdout + stderr;
       expect(combined).toContain("Installed codex-jev to");
     });
+
+    test("installs claude-jev and jev-logs alongside codex-jev", async () => {
+      const server = startFixtureServer(FIXTURES);
+      const installDir = join(tempDir, "install-all-binaries");
+
+      const { stdout, stderr, exitCode } = await runInstallerWithServer(
+        server,
+        installDir,
+      );
+      server.stop();
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      expect(combined).toContain("Installed codex-jev to");
+      expect(combined).toContain("Installed claude-jev to");
+      expect(combined).toContain("Installed jev-logs to");
+
+      const codexInfo = await stat(join(installDir, "codex-jev"));
+      expect(codexInfo.mode & 0o111).toBeGreaterThan(0);
+
+      const claudeInfo = await stat(join(installDir, "claude-jev"));
+      expect(claudeInfo.mode & 0o111).toBeGreaterThan(0);
+
+      const jevLogsInfo = await stat(join(installDir, "jev-logs"));
+      expect(jevLogsInfo.mode & 0o111).toBeGreaterThan(0);
+    });
+
+    test("verifies checksums for all three binaries", async () => {
+      const server = startFixtureServer(FIXTURES);
+      const installDir = join(tempDir, "install-checksums-all");
+
+      const { stdout, stderr, exitCode } = await runInstallerWithServer(
+        server,
+        installDir,
+      );
+      server.stop();
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      const checksumMatches = combined.match(/Checksum verified:/g);
+      expect(checksumMatches).not.toBeNull();
+      expect(checksumMatches!.length).toBe(3);
+    });
   });
 
   describe("checksum verification", () => {
@@ -318,8 +363,12 @@ describe("install.sh", () => {
       server.stop();
 
       expect(exitCode).toBe(0);
-      const info = await stat(join(installDir, "codex-jev"));
-      expect(info.mode & 0o111).toBeGreaterThan(0);
+      const codexInfo = await stat(join(installDir, "codex-jev"));
+      expect(codexInfo.mode & 0o111).toBeGreaterThan(0);
+      const claudeInfo = await stat(join(installDir, "claude-jev"));
+      expect(claudeInfo.mode & 0o111).toBeGreaterThan(0);
+      const jevLogsInfo = await stat(join(installDir, "jev-logs"));
+      expect(jevLogsInfo.mode & 0o111).toBeGreaterThan(0);
     });
   });
 

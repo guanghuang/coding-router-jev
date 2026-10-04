@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-    Install or upgrade codex-jev on Windows.
+    Install or upgrade codex-jev, claude-jev, and jev-logs on Windows.
 
 .DESCRIPTION
-    Downloads a prebuilt codex-jev binary, verifies its SHA-256 checksum,
-    and installs it to the user-local application directory.
+    Downloads prebuilt codex-jev, claude-jev, and jev-logs binaries,
+    verifies their SHA-256 checksums, and installs them to the user-local
+    application directory.
 
     Usage (public repository, once public):
       irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
@@ -47,7 +48,11 @@ $ErrorActionPreference = 'Stop'
 
 $Script:Repo = 'guanghuang/coding-router-jev'
 $Script:BinaryName = 'codex-jev'
+$Script:ClaudeBinaryName = 'claude-jev'
+$Script:JevLogsBinaryName = 'jev-logs'
 $Script:AssetName = 'codex-jev-windows-x64.exe'
+$Script:ClaudeAssetName = 'claude-jev-windows-x64.exe'
+$Script:JevLogsAssetName = 'jev-logs-windows-x64.exe'
 $Script:TempDir = $null
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -64,7 +69,7 @@ function Exit-WithError {
 
 function Show-Help {
     @"
-Install or upgrade codex-jev on Windows.
+Install or upgrade codex-jev, claude-jev, and jev-logs on Windows.
 
 Usage:
   install.ps1 [OPTIONS]
@@ -80,17 +85,21 @@ Environment:
   INSTALL_DIR        Same as -Dir
   GH_TOKEN           GitHub token for private repository access
 
-The installer downloads a prebuilt binary, verifies its SHA-256
-checksum, and places it in the install directory. It adds the install
-directory to the user PATH (not the system PATH) without administrator
-privileges or duplicate entries. It never modifies ~/.coding-router-jev.env.
+The installer downloads prebuilt binaries for codex-jev, claude-jev,
+and jev-logs, verifies their SHA-256 checksums, and places them in
+the install directory. It adds the install directory to the user PATH
+(not the system PATH) without administrator privileges or duplicate
+entries. It never modifies ~/.coding-router-jev.env.
 
 Prerequisites:
-  The Codex CLI (codex) must be installed and authenticated separately.
+  codex-jev requires the Codex CLI (codex) installed and authenticated.
+  claude-jev requires the Claude Code CLI (claude) installed and authenticated.
 
 Uninstall:
   Remove-Item "`$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev.exe"
-  The installer only manages the single binary; ~/.coding-router-jev.env
+  Remove-Item "`$env:LOCALAPPDATA\coding-router-jev\bin\claude-jev.exe"
+  Remove-Item "`$env:LOCALAPPDATA\coding-router-jev\bin\jev-logs.exe"
+  The installer only manages the binaries; ~/.coding-router-jev.env
   is yours to keep or remove.
 
 Rollback:
@@ -268,7 +277,8 @@ The downloaded file may be corrupted or tampered with.
 function Install-Binary {
     param(
         [string]$Source,
-        [string]$DestDir
+        [string]$DestDir,
+        [string]$Name
     )
 
     try {
@@ -280,7 +290,7 @@ function Install-Binary {
         Exit-WithError "cannot create install directory $DestDir`: $_"
     }
 
-    $dest = Join-Path $DestDir "$Script:BinaryName.exe"
+    $dest = Join-Path $DestDir "$Name.exe"
 
     if (Test-Path $dest) {
         Write-Log "Replacing existing installation at $dest"
@@ -290,10 +300,10 @@ function Install-Binary {
             if (Test-Path $backupPath) {
                 Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
             }
-            Rename-Item -Path $dest -NewName "$Script:BinaryName.exe.old" -Force -ErrorAction Stop
+            Rename-Item -Path $dest -NewName "$Name.exe.old" -Force -ErrorAction Stop
         }
         catch {
-            Exit-WithError "cannot replace $dest. The file may be in use. Close any running codex-jev processes and try again."
+            Exit-WithError "cannot replace $dest. The file may be in use. Close any running $Name processes and try again."
         }
     }
 
@@ -301,14 +311,14 @@ function Install-Binary {
         Copy-Item -Path $Source -Destination $dest -Force
     }
     catch {
-        $backupPath = Join-Path $DestDir "$Script:BinaryName.exe.old"
+        $backupPath = Join-Path $DestDir "$Name.exe.old"
         if (Test-Path $backupPath) {
             try {
-                Rename-Item -Path $backupPath -NewName "$Script:BinaryName.exe" -Force
+                Rename-Item -Path $backupPath -NewName "$Name.exe" -Force
                 Exit-WithError "upgrade failed; previous installation restored at $dest. The new binary could not be copied."
             }
             catch {
-                Exit-WithError "upgrade failed and restore failed. The previous binary may be at $backupPath — rename it to $Script:BinaryName.exe manually."
+                Exit-WithError "upgrade failed and restore failed. The previous binary may be at $backupPath — rename it to $Name.exe manually."
             }
         }
         else {
@@ -320,12 +330,12 @@ function Install-Binary {
     }
 
     # Clean up backup
-    $backupPath = Join-Path $DestDir "$Script:BinaryName.exe.old"
+    $backupPath = Join-Path $DestDir "$Name.exe.old"
     if (Test-Path $backupPath) {
         Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
     }
 
-    Write-Log "Installed $Script:BinaryName to $dest"
+    Write-Log "Installed $Name to $dest"
 }
 
 # ── PATH guidance ────────────────────────────────────────────────────────────
@@ -438,24 +448,37 @@ function Main {
         $assetDest = Join-Path $Script:TempDir $Script:AssetName
         Get-ReleaseAsset -Tag $tag -AssetName $Script:AssetName -Destination $assetDest
 
+        $claudeAssetDest = Join-Path $Script:TempDir $Script:ClaudeAssetName
+        Get-ReleaseAsset -Tag $tag -AssetName $Script:ClaudeAssetName -Destination $claudeAssetDest
+
+        $jevLogsAssetDest = Join-Path $Script:TempDir $Script:JevLogsAssetName
+        Get-ReleaseAsset -Tag $tag -AssetName $Script:JevLogsAssetName -Destination $jevLogsAssetDest
+
         $sumsDest = Join-Path $Script:TempDir 'SHA256SUMS'
         Get-ReleaseAsset -Tag $tag -AssetName 'SHA256SUMS' -Destination $sumsDest
 
         Test-Checksum -FilePath $assetDest -SumsFilePath $sumsDest
+        Test-Checksum -FilePath $claudeAssetDest -SumsFilePath $sumsDest
+        Test-Checksum -FilePath $jevLogsAssetDest -SumsFilePath $sumsDest
 
-        Install-Binary -Source $assetDest -DestDir $installDir
+        Install-Binary -Source $assetDest -DestDir $installDir -Name $Script:BinaryName
+        Install-Binary -Source $claudeAssetDest -DestDir $installDir -Name $Script:ClaudeBinaryName
+        Install-Binary -Source $jevLogsAssetDest -DestDir $installDir -Name $Script:JevLogsBinaryName
 
         Update-UserPath -InstallDir $installDir
 
         Write-Log ""
-        Write-Log "Done! Run '$Script:BinaryName --help' to get started."
+        Write-Log "Done! Run '$Script:BinaryName --help' or '$Script:ClaudeBinaryName --help' to get started."
         Write-Log ""
         Write-Log "Prerequisites:"
-        Write-Log "  The Codex CLI (codex) must be installed and authenticated separately."
-        Write-Log "  See https://github.com/openai/codex for installation instructions."
+        Write-Log "  codex-jev requires the Codex CLI (codex) installed and authenticated separately."
+        Write-Log "  claude-jev requires Claude Code CLI (claude) installed and authenticated separately."
+        Write-Log "  See https://github.com/openai/codex and https://code.claude.com for installation."
         Write-Log ""
         Write-Log "Uninstall:"
         Write-Log "  Remove-Item '$(Join-Path $installDir "$Script:BinaryName.exe")'"
+        Write-Log "  Remove-Item '$(Join-Path $installDir "$Script:ClaudeBinaryName.exe")'"
+        Write-Log "  Remove-Item '$(Join-Path $installDir "$Script:JevLogsBinaryName.exe")'"
     }
     finally {
         Remove-TempDir
