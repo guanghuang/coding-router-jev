@@ -69,7 +69,7 @@ less install.sh      # review the script
 sh install.sh        # run after review
 ```
 
-**Private repository:**
+**Private repository (requires authentication):**
 
 ```sh
 export GH_TOKEN="$(gh auth token)"
@@ -160,7 +160,7 @@ Get-Content install.ps1   # review the script
 .\install.ps1              # run after review
 ```
 
-**Private repository:**
+**Private repository (requires authentication):**
 
 ```powershell
 $env:GH_TOKEN = gh auth token
@@ -200,7 +200,7 @@ Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 
 ```powershell
 Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev.exe"
-# ~/.coding-router-jev.env is yours to keep or remove
+# %USERPROFILE%\.coding-router-jev.env is yours to keep or remove
 ```
 
 The installer adds the install directory to the user `PATH` (not the system `PATH`) without administrator privileges and without duplicate entries. The binary is available in the current session immediately; open a new terminal for other shells to pick it up. The installer never modifies `~/.coding-router-jev.env`. If a running `codex-jev.exe` locks the existing binary, the installer reports an actionable error.
@@ -212,6 +212,8 @@ Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.e
 > **Note:** The binary is unsigned. Windows SmartScreen may display a "Windows protected your PC" dialog on first run. Click **More info → Run anyway**. This is expected for unsigned executables distributed outside the Windows Store. The installer itself runs within PowerShell and does not trigger SmartScreen.
 
 ### Manual download
+
+While the repository is **private**, run `gh auth login` first so `gh release download` can access assets. After the repository is public, the same commands work without extra setup.
 
 ```sh
 # Download the latest release (requires gh CLI and repository access)
@@ -252,7 +254,7 @@ Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; ma
 | --- | --- | --- |
 | macOS (ARM64) | Apple Silicon | Prefer `codex-jev-darwin-arm64` |
 | macOS (x64) | Intel Macs; Apple Silicon via Rosetta 2 | Use `codex-jev-darwin-x64` only when you need the Intel build |
-| Linux (x64) | glibc Linux, SSE4.2 | CI smoke-tested on Ubuntu 22.04 x64 |
+| Linux (x64) | glibc Linux, SSE4.2 | Release workflow smoke-tests the x64 binary on `ubuntu-latest` |
 | Linux (ARM64) | glibc Linux | Cross-compiled in CI; not yet run on ARM64 hardware |
 | Windows (x64) | Windows 10+ x64 | Native x64 only; ARM64 not supported |
 
@@ -270,10 +272,11 @@ Configure routing via `~/.coding-router-jev.env` (see [Configuration](#configura
 
 ## Install from source (Bun required)
 
-Running from source requires [Bun](https://bun.sh/).
+Running from source requires [Bun](https://bun.sh/). While the repository is **private**, clone with `gh repo clone guanghuang/coding-router-jev` after `gh auth login` instead of anonymous `git clone`.
 
 ```sh
-git clone https://github.com/guanghuang/coding-router-jev.git
+gh auth login   # private repository only
+gh repo clone guanghuang/coding-router-jev
 cd coding-router-jev
 bun install
 ```
@@ -464,6 +467,22 @@ The `.github/workflows/release.yml` workflow validates, cross-compiles, and publ
 
 Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
 
+### Installer verification status
+
+**Automated (CI / unit tests):** `install.sh` and `install.ps1` flows — download, checksum verification, version pinning, upgrade replace, auth with `GH_TOKEN`, config file preservation, and error handling — are covered by `test/install.test.ts` and `test/install-windows.test.ts`. Release workflow smoke-tests the Linux x64 binary.
+
+**Manually verified:**
+
+- **macOS (ARM64 and x64)**: End-to-end `install.sh`, PATH guidance, Gatekeeper quarantine removal.
+- **Linux (x64)**: End-to-end `install.sh` on Ubuntu 22.04.
+- **Windows (x64)**: End-to-end `install.ps1`, user PATH updates, SmartScreen on first binary run, locked-binary error when the executable is in use.
+
+**Not yet verified:**
+
+- Linux ARM64 on physical hardware (CI cross-compiles only).
+- Interactive multi-turn routing sessions on all platforms (verified locally on macOS only).
+- ChatGPT desktop or Work integration (not implemented; not advertised).
+
 ## Troubleshooting
 
 ### "codex: command not found" or "codex-jev starts but cannot find Codex"
@@ -507,16 +526,18 @@ While the repository is private, release downloads and (when not using a local c
 ```sh
 export GH_TOKEN="$(gh auth token)"
 sh install.sh
+unset GH_TOKEN
 ```
 
 ```powershell
 $env:GH_TOKEN = gh auth token
 .\install.ps1
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 ```
 
-Look for `authorization failed while trying to` in installer output. `gh auth login` alone is not enough unless you export `GH_TOKEN` as above. If downloads of `install.sh` / `install.ps1` from `raw.githubusercontent.com` fail with 404/401, use `gh repo clone` or an authenticated `curl`/`Invoke-RestMethod` fetch (see the **Private repository** install sections above).
+Look for `authorization failed while trying to` in installer output. `gh auth login` alone is not enough unless you export `GH_TOKEN` as above. If downloads of `install.sh` / `install.ps1` from `raw.githubusercontent.com` fail with 404/401, use `gh repo clone` or an authenticated `curl`/`Invoke-RestMethod` fetch (see the **Private repository (requires authentication)** install sections above). Prefer cloning a release tag and running `install.sh` from that checkout when you want the installer script pinned to a version.
 
-Verify your token can read this repository and its releases (classic `repo` scope or fine-grained read access). Avoid prefix assignments like `GH_TOKEN=… sh install.sh` — they expose the token in process listings and shell history.
+Verify your token can read this repository and its releases (fine-grained read access to contents and releases is preferred over broad classic `repo` scope). Avoid prefix assignments like `GH_TOKEN=… sh install.sh` — they expose the token in process listings and shell history.
 
 ### Release not found / unavailable
 
@@ -549,22 +570,6 @@ SmartScreen may show "Windows protected your PC" on first run. Click **More info
 ### Routing history log location
 
 Session logs are written to `${TMPDIR:-/tmp}/coding-router-jev/` on macOS/Linux. On Windows, the equivalent `%TEMP%` directory is used. Logs contain user prompts — treat them as confidential.
-
-## Installer verification status
-
-**Automated (CI / unit tests):** `install.sh` and `install.ps1` flows — download, checksum verification, version pinning, upgrade replace, auth headers with `GH_TOKEN`, config file preservation, and error handling — are covered by `test/install.test.ts` and `test/install-windows.test.ts`. Release workflow smoke-tests the Linux x64 binary.
-
-**Manually verified:**
-
-- **macOS (ARM64 and x64)**: End-to-end `install.sh`, PATH guidance, Gatekeeper quarantine removal.
-- **Linux (x64)**: End-to-end `install.sh` on Ubuntu 22.04.
-- **Windows (x64)**: End-to-end `install.ps1`, user PATH updates, SmartScreen on first binary run, locked-binary error when the executable is in use.
-
-**Not yet verified:**
-
-- Linux ARM64 on physical hardware (CI cross-compiles only).
-- Interactive multi-turn routing sessions on all platforms (verified locally on macOS only).
-- ChatGPT desktop or Work integration (not implemented; not advertised).
 
 ## Attribution
 
