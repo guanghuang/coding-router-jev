@@ -17,11 +17,12 @@ chmod +x codex-jev-linux-x64
 mv codex-jev-linux-x64 ~/.local/bin/codex-jev
 ```
 
-Verify the download checksum (both the binary and `SHA256SUMS` must be in the same directory):
+Verify the download checksum (the downloaded binary and `SHA256SUMS` must be in the same directory):
 
 ```sh
 gh release download --repo guanghuang/coding-router-jev --pattern 'SHA256SUMS'
-sha256sum --check --ignore-missing SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
+sha256sum --check SHA256SUMS    # on macOS: shasum -a 256 --check SHA256SUMS
+# Only the files present in the directory are checked; missing files cause an error.
 ```
 
 ### Platform support
@@ -226,7 +227,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-The `.github/workflows/release.yml` workflow validates, cross-compiles, and publishes release assets. The tag version must match `package.json`. Use `workflow_dispatch` with `dry_run=true` to test the build without publishing.
+The `.github/workflows/release.yml` workflow validates, cross-compiles, and publishes release assets. The tag version must match `package.json`. Use `workflow_dispatch` to test the build pipeline without publishing (the version-tag check is skipped on manual dispatch; the release job only runs on tag push).
 
 Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
 

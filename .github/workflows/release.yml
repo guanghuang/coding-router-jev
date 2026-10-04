@@ -56,6 +56,7 @@ jobs:
         id: version
         env:
           TAG: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           PKG_VERSION=$(bun -e "console.log(require('./package.json').version)")
@@ -63,14 +64,19 @@ jobs:
             echo "::error::Could not read version from package.json"
             exit 1
           fi
-          TAG_VERSION="${TAG#v}"
-          echo "package.json version: $PKG_VERSION"
-          echo "Tag version:          $TAG_VERSION"
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::Version mismatch: package.json ($PKG_VERSION) != tag ($TAG_VERSION)"
-            exit 1
-          fi
           echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Skipping tag-version check on manual dispatch (ref=$TAG)."
+            echo "package.json version: $PKG_VERSION"
+          else
+            TAG_VERSION="${TAG#v}"
+            echo "package.json version: $PKG_VERSION"
+            echo "Tag version:          $TAG_VERSION"
+            if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::Version mismatch: package.json ($PKG_VERSION) != tag ($TAG_VERSION)"
+              exit 1
+            fi
+          fi
 
   build:
     name: Build binaries
@@ -122,11 +128,11 @@ jobs:
           }
           echo "$OUTPUT"
           if echo "$OUTPUT" | grep -q '"stub":"codex"'; then
-            echo "Smoke test: launcher forwarded args to codex fixture"
+            echo "Smoke test PASSED: launcher forwarded args to codex fixture"
           else
-            echo "Smoke test: binary executed (codex fixture output not detected; launcher may have exited before spawn)"
+            echo "::error::Smoke test FAILED: codex fixture output not detected in binary output. The launcher may not be forwarding args correctly."
+            exit 1
           fi
-          echo "Smoke test passed"
 
       - name: Generate and verify SHA256SUMS
         working-directory: dist
@@ -161,7 +167,7 @@ jobs:
   release:
     name: Create release
     needs: [validate, build]
-    if: github.event_name == 'push' || inputs.dry_run == 'false'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -185,11 +191,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" --repo "${{ github.repository }}" --json tagName >/dev/null 2>&1; then
+          HTTP_CODE=$(gh api "repos/$REPO/releases/tags/$TAG" \
+            --silent --include 2>&1 | head -1 | awk '{print $2}') || HTTP_CODE="error"
+          if [ "$HTTP_CODE" = "404" ]; then
+            echo "No existing release for $TAG."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [ "$HTTP_CODE" = "200" ]; then
             echo "Release $TAG already exists; checking checksums."
-            EXISTING_SUMS=$(gh release download "$TAG" --repo "${{ github.repository }}" --pattern SHA256SUMS --output - 2>/dev/null) || {
+            EXISTING_SUMS=$(gh release download "$TAG" --repo "$REPO" --pattern SHA256SUMS --output -) || {
               echo "::error::Release $TAG exists but SHA256SUMS could not be downloaded. Delete the release manually or fix its assets."
               exit 1
             }
@@ -205,7 +217,8 @@ jobs:
             echo "Release already exists with matching checksums; skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Unexpected response ($HTTP_CODE) when checking release $TAG. Possible auth or API error."
+            exit 1
           fi
 
       - name: Create GitHub release
