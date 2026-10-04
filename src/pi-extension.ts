@@ -108,28 +108,28 @@ export function resolveEffort(
   candidate: Candidate,
   priorLevel: PiThinkingLevel | undefined,
   clamp: PiClamp,
-  config: { provider: string; modelId: string },
+  modelRef: { provider: string; modelId: string },
 ): PiThinkingLevel {
-  const supported = clamp.getSupportedThinkingLevels(config);
+  const supported = clamp.getSupportedThinkingLevels(modelRef);
 
   if (supported.length === 0 || (supported.length === 1 && supported[0] === "off")) {
     return "off";
   }
 
   if (jevEffort && jevEffort !== "keep" && supported.includes(jevEffort as PiThinkingLevel)) {
-    return clamp.clampThinkingLevel(config, jevEffort as PiThinkingLevel);
+    return clamp.clampThinkingLevel(modelRef, jevEffort as PiThinkingLevel);
   }
 
   if (priorLevel && supported.includes(priorLevel)) {
-    return clamp.clampThinkingLevel(config, priorLevel);
+    return clamp.clampThinkingLevel(modelRef, priorLevel);
   }
 
   const fallback = candidate.defaultEffort as PiThinkingLevel | undefined;
   if (fallback && supported.includes(fallback)) {
-    return clamp.clampThinkingLevel(config, fallback);
+    return clamp.clampThinkingLevel(modelRef, fallback);
   }
 
-  return clamp.clampThinkingLevel(config, supported.includes("medium") ? "medium" : supported[0]);
+  return clamp.clampThinkingLevel(modelRef, supported.includes("medium") ? "medium" : supported[0]);
 }
 
 export function estimateContextTokens(request: PiRequest): ContextEvidence {
@@ -255,19 +255,20 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     const eligibility = checkEligibility(candidates, contextTokens, 16_000);
     const eligibleCandidates = [...eligibility.eligible, ...eligibility.unknown];
     if (eligibleCandidates.length === 0) {
-      return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false);
+      return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, "capacity/no-eligible", null);
     }
 
-    const recentContext = request.priorContext ? {
+    const recentContext = config.sendRecentContext && request.priorContext ? {
       previous_user_request: (request.priorContext.userExcerpt ?? "").slice(0, 1000),
       ...(request.priorContext.assistantExcerpt ? { previous_assistant_excerpt: request.priorContext.assistantExcerpt.slice(0, 1000) } : {}),
     } : undefined;
 
+    const currentQualifiedModel = `${state.provider}/${state.modelId}`;
     const callerOptions: CallerOptions = { signal: request.signal };
     const routingInput = {
       prompt,
       currentTier: state.tier,
-      currentModel: state.modelId,
+      currentModel: currentQualifiedModel,
       currentEffort: state.effectiveEffort,
       contextTokens,
       candidates: eligibleCandidates,
@@ -332,14 +333,14 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     );
 
     state = {
-      tier: decision.tier,
+      tier: selected.tier,
       provider: selProvider,
       modelId: selModelId,
       effectiveEffort: effort,
       version: state.version + 1,
     };
 
-    return buildResult(selProvider, selModelId, effort, decision.tier, true, decisionLabel(decision.reason), confidence);
+    return buildResult(selProvider, selModelId, effort, selected.tier, true, decisionLabel(decision.reason), confidence);
   }
 
   function buildResult(

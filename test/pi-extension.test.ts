@@ -859,4 +859,137 @@ describe("prior context capping", () => {
     expect(capturedInput.recentContext.previous_user_request).toBe("previous question");
     expect(capturedInput.recentContext.previous_assistant_excerpt).toBeUndefined();
   });
+
+  test("sendRecentContext=false omits prior context", async () => {
+    let capturedInput: any;
+    const route = async (input: unknown) => {
+      capturedInput = input;
+      return {
+        request: {} as any,
+        response: {
+          answers: {
+            model: { type: "choice", choice: "fast", confidence: 0.9, probabilities: {} },
+            reasoning_effort: { type: "choice", choice: "medium", confidence: 0.9, probabilities: {} },
+          },
+          usage: { input_tokens: 10, output_tokens: 5 },
+        } as any,
+        ms: 5,
+      };
+    };
+    const adapter = createPiAdapter({
+      config: configFromEnv({ CODING_ROUTER_SEND_RECENT_CONTEXT: "false" }),
+      route,
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+    });
+    await adapter.resolveModel({
+      reason: "user",
+      text: "test",
+      priorContext: { userExcerpt: "should be ignored", assistantExcerpt: "also ignored" },
+    });
+    expect(capturedInput.recentContext).toBeUndefined();
+  });
+});
+
+describe("capacity — all candidates rejected", () => {
+  test("returns current model with capacity/no-eligible decision when all rejected", async () => {
+    const smallModels: PiModelInfo[] = [
+      { provider: "openai-codex", modelId: "gpt-6-luna", displayName: "Luna", contextWindow: 50_000, thinkingLevels: ["off", "low", "medium"], authenticated: true },
+    ];
+    const smallLevels: Record<string, PiThinkingLevel[]> = {
+      "openai-codex/gpt-6-luna": ["off", "low", "medium"],
+    };
+    const { route, getCount } = countingRoute("fast", "medium", 0.9);
+    const adapter = createPiAdapter({
+      config: configFromEnv({ CODING_ROUTER_BALANCED_MODEL_PI: "openai-codex/gpt-6-luna", CODING_ROUTER_STRONG_MODEL_PI: "openai-codex/gpt-6-luna" }),
+      route,
+      registry: fakeRegistry(smallModels),
+      clamp: fakeClamp(smallLevels),
+    });
+    const result = await adapter.resolveModel({
+      reason: "user",
+      text: "huge context",
+      contextTokens: 100_000,
+    });
+    expect(getCount()).toBe(0);
+    expect(result.fromClassifier).toBe(false);
+    expect(result.decision).toBe("capacity/no-eligible");
+  });
+});
+
+describe("concurrent user resolves are serialized", () => {
+  test("second call waits for first to complete", async () => {
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    let callCount = 0;
+    const route = async () => {
+      callCount++;
+      if (callCount === 1) {
+        order.push("first-start");
+        await new Promise<void>(r => { resolveFirst = r; });
+        order.push("first-end");
+      } else {
+        order.push("second");
+      }
+      return {
+        request: {} as any,
+        response: {
+          answers: {
+            model: { type: "choice", choice: "fast", confidence: 0.9, probabilities: {} },
+            reasoning_effort: { type: "choice", choice: "medium", confidence: 0.9, probabilities: {} },
+          },
+          usage: { input_tokens: 10, output_tokens: 5 },
+        } as any,
+        ms: 5,
+      };
+    };
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route,
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+    });
+    const p1 = adapter.resolveModel({ reason: "user", text: "first" });
+    const p2 = adapter.resolveModel({ reason: "user", text: "second" });
+    await Bun.sleep(10);
+    resolveFirst!();
+    await Promise.all([p1, p2]);
+    expect(order).toEqual(["first-start", "first-end", "second"]);
+  });
+});
+
+describe("route throw with aborted signal", () => {
+  test("catch path detects aborted signal and does not commit state", async () => {
+    let callCount = 0;
+    const route = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          request: {} as any,
+          response: {
+            answers: {
+              model: { type: "choice", choice: "strong", confidence: 0.9, probabilities: {} },
+              reasoning_effort: { type: "choice", choice: "high", confidence: 0.9, probabilities: {} },
+            },
+            usage: { input_tokens: 10, output_tokens: 5 },
+          } as any,
+          ms: 5,
+        };
+      }
+      throw new Error("connection reset");
+    };
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route,
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+    });
+    await adapter.resolveModel({ reason: "user", text: "establish" });
+    const vBefore = adapter.state?.version;
+    const controller = new AbortController();
+    controller.abort();
+    const r = await adapter.resolveModel({ reason: "user", text: "fail with abort", signal: controller.signal });
+    expect(r.fromClassifier).toBe(false);
+    expect(adapter.state?.version).toBe(vBefore);
+  });
 });
