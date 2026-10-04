@@ -255,9 +255,9 @@ test("jev notices are stripped from upstream history and fabricated lookalikes d
 
     // The jev notice should be stripped from the forwarded request
     const forwarded = captured[1].body.input as Item[];
-    expect(forwarded.some(item => (item as Record<string, unknown>).id === jevNotice.id)).toBe(false);
+    expect(forwarded.some(item => item.id === jevNotice.id)).toBe(false);
     // The fabricated lookalike is a regular msg_… message — it is preserved
-    expect(forwarded.some(item => (item as Record<string, unknown>).id === fabricatedLookalike.id)).toBe(true);
+    expect(forwarded.some(item => item.id === fabricatedLookalike.id)).toBe(true);
     // Normal assistant and user messages are preserved
     expect(forwarded.some(item => item.content === "Here is my answer.")).toBe(true);
     expect(forwarded.some(item => item.content === "implement first")).toBe(true);
@@ -298,7 +298,7 @@ test("jev notices are stripped even with custom feedback format", async () => {
     await send([first, jevNotice, normalAssistant, second]);
 
     const forwarded = captured[1].body.input as Item[];
-    expect(forwarded.some(item => (item as Record<string, unknown>).id === "jev-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe(false);
+    expect(forwarded.some(item => item.id === "jev-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe(false);
     expect(forwarded.some(item => item.content === "response text")).toBe(true);
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
@@ -334,7 +334,146 @@ test("tool continuations after jev notice filtering still work correctly", async
     expect(inputs).toHaveLength(1);
 
     const forwarded = captured[1].body.input as Item[];
-    expect(forwarded.some(item => (item as Record<string, unknown>).id?.toString().startsWith("jev-"))).toBe(false);
+    expect(forwarded.some(item => typeof item.id === "string" && item.id.startsWith("jev-"))).toBe(false);
     expect(forwarded.some(item => item.type === "function_call_output")).toBe(true);
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("multiple jev notices in same history are all stripped", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-strip-multi-"));
+  const captured: { body: CodexBody }[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    captured.push({ body });
+    return new Response(`event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { model: body.model, usage: { input_tokens_details: { cached_tokens: 10 } } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => result(input, "fast", "low");
+  const proxy = startProxy(configFromEnv({}), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  const local = `http://127.0.0.1:${proxy.port}`;
+  const send = (input: Item[]) => fetch(`${local}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input }) }).then(r => r.text());
+  try {
+    await fetch(`${local}/models`).then(r => r.json());
+    const first: Item = { role: "user", content: "first" };
+    await send([first]);
+
+    // Two genuine jev notices from separate turns + one regular assistant message
+    const jevNotice1: Item = { role: "assistant", id: "jev-11111111-1111-1111-1111-111111111111", content: [{ type: "output_text", text: "[Jev] turn 1 notice" }] };
+    const assistant1: Item = { role: "assistant", content: "answer to first" };
+    const second: Item = { role: "user", content: "second" };
+    const jevNotice2: Item = { role: "assistant", id: "jev-22222222-2222-2222-2222-222222222222", content: [{ type: "output_text", text: "[Jev] turn 2 notice" }] };
+    const assistant2: Item = { role: "assistant", content: "answer to second" };
+    const third: Item = { role: "user", content: "third" };
+    await send([first, jevNotice1, assistant1, second, jevNotice2, assistant2, third]);
+
+    const forwarded = captured[1].body.input as Item[];
+    const jevItems = forwarded.filter(item => typeof item.id === "string" && item.id.startsWith("jev-"));
+    expect(jevItems).toHaveLength(0);
+    expect(forwarded.filter(item => item.role === "assistant").map(item => item.content)).toEqual(["answer to first", "answer to second"]);
+    expect(forwarded.filter(item => item.role === "user").map(item => item.content)).toEqual(["first", "second", "third"]);
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("compact requests also strip jev notices from history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-strip-compact-"));
+  const captured: { body: CodexBody }[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    captured.push({ body });
+    return Response.json({ model: body.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => result(input, "fast", "low");
+  const proxy = startProxy(configFromEnv({}), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  const local = `http://127.0.0.1:${proxy.port}`;
+  try {
+    await fetch(`${local}/models`).then(r => r.json());
+    // First turn via normal endpoint to establish state
+    const first: Item = { role: "user", content: "hello" };
+    await fetch(`${local}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [first] }) }).then(r => r.text());
+
+    // Compact request with a jev notice in history
+    const jevNotice: Item = { role: "assistant", id: "jev-cccccccc-cccc-cccc-cccc-cccccccccccc", content: [{ type: "output_text", text: "[Jev] compact notice" }] };
+    const assistant: Item = { role: "assistant", content: "answer" };
+    const second: Item = { role: "user", content: "follow up" };
+    await fetch(`${local}/responses/compact`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [first, jevNotice, assistant, second] }) }).then(r => r.text());
+
+    const forwarded = captured[1].body.input as Item[];
+    expect(forwarded.some(item => typeof item.id === "string" && item.id.startsWith("jev-"))).toBe(false);
+    expect(forwarded.some(item => item.content === "answer")).toBe(true);
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("previous_response_id continuation still works after notice filtering", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-strip-previd-"));
+  const captured: { body: CodexBody }[] = [];
+  const inputs: RoutingInput[] = [];
+  let responseCount = 0;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    captured.push({ body });
+    responseCount++;
+    const responseId = `resp_${responseCount}`;
+    return new Response(`event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: responseId, model: body.model, usage: { input_tokens_details: { cached_tokens: 10 } } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => { inputs.push(input); return result(input, "fast", "low"); };
+  const proxy = startProxy(configFromEnv({}), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  const local = `http://127.0.0.1:${proxy.port}`;
+  const send = (body: Record<string, unknown>) => fetch(`${local}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => r.text());
+  try {
+    await fetch(`${local}/models`).then(r => r.json());
+    // First turn
+    await send({ model: AUTO_MODEL, input: [{ role: "user", content: "first request" }] });
+    expect(inputs).toHaveLength(1);
+
+    // Second turn using previous_response_id, with a jev notice in history
+    const jevNotice: Item = { role: "assistant", id: "jev-dddddddd-dddd-dddd-dddd-dddddddddddd", content: [{ type: "output_text", text: "[Jev] previous notice" }] };
+    await send({ model: AUTO_MODEL, previous_response_id: "resp_1", input: [{ role: "user", content: "first request" }, jevNotice, { role: "assistant", content: "answer" }, { role: "user", content: "continue with prev id" }] });
+    expect(inputs).toHaveLength(2);
+
+    // Notice stripped from forwarded request
+    const forwarded = captured[1].body.input as Item[];
+    expect(forwarded.some(item => typeof item.id === "string" && item.id.startsWith("jev-"))).toBe(false);
+    expect(forwarded.some(item => item.content === "answer")).toBe(true);
+    expect(forwarded.some(item => item.content === "continue with prev id")).toBe(true);
+    // Routing still works — previous_response_id maps to correct conversation
+    expect(inputs[1].currentModel).toBe("gpt-6-luna");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("explicit model requests also strip jev notices from upstream history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-strip-explicit-"));
+  const captured: { body: CodexBody }[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+    ] });
+    const body = await req.json() as CodexBody;
+    captured.push({ body });
+    return Response.json({ model: body.model, usage: { input_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const base = `http://127.0.0.1:${upstream.port}`;
+  const route: Route = async input => result(input, "fast", "low");
+  const proxy = startProxy(configFromEnv({}), { route, apiBaseURL: base, chatgptBaseURL: base, logDirectory: directory });
+  const local = `http://127.0.0.1:${proxy.port}`;
+  try {
+    await fetch(`${local}/models`).then(r => r.json());
+    // Explicit model request with a jev notice in history
+    const jevNotice: Item = { role: "assistant", id: "jev-eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", content: [{ type: "output_text", text: "[Jev] notice" }] };
+    await fetch(`${local}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "gpt-6-luna", input: [{ role: "user", content: "hello" }, jevNotice, { role: "assistant", content: "real answer" }, { role: "user", content: "continue" }] }) }).then(r => r.text());
+
+    const forwarded = captured[0].body.input as Item[];
+    expect(forwarded.some(item => typeof item.id === "string" && item.id.startsWith("jev-"))).toBe(false);
+    expect(forwarded.some(item => item.content === "real answer")).toBe(true);
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });

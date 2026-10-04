@@ -62,6 +62,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         state.model = body.model;
         state.tier = match?.tier ?? state.tier;
         state.effort = { base: body.reasoning?.effort, effort: body.reasoning?.effort, updates: [] };
+        if (Array.isArray(body.input)) body.input = body.input.filter(item => !isJevNotice(item));
         return { key, state, notice: undefined as string | undefined, noticeKey: undefined as string | undefined };
       }
       const turn = compact ? undefined : newTurn(body);
