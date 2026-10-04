@@ -29,5 +29,9 @@
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": { "optional": true },
     "@earendil-works/pi-ai": { "optional": true }
+  },
+  "pi": {
+    "extensions": ["./src/pi-extension.ts"],
+    "skills": ["./skills/pi/jev-logs"]
   }
 }
