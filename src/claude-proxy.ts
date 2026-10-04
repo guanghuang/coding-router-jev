@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "./config";
 import { hash } from "./context";
-import { decide, decisionLabel } from "./policy";
+import { decide, decisionLabel, checkEligibility } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult } from "./router";
 import { formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { TIERS, type Candidate, type RecentContext, type Tier } from "./types";
 import { textOfMessage, isToolResult, type ClaudeBody } from "./claude-types";
+import { lookupCapabilities, claudeEffortsFor, claudeCapacity, resolveClaudeThinking, CLAUDE_OVERRIDE_ALIASES } from "./claude-capabilities";
 
 export const CLAUDE_SENTINEL = "coding-router-jev";
 
@@ -79,6 +80,7 @@ function claudeRecentContext(body: ClaudeBody): RecentContext | undefined {
 type ClaudeState = {
   tier: Tier;
   model: string;
+  lastEffort?: string;
   lastTurn?: string;
   notice?: string;
   noticeKey?: string;
@@ -89,13 +91,16 @@ type ClaudeState = {
 export function claudeCandidatesFor(config: Config): Candidate[] {
   return TIERS.filter(tier => tier !== "long" || config.longModelEnabled).map(tier => {
     const id = config.claudeModels[tier];
-    const efforts: string[] = [];
+    const caps = lookupCapabilities(id);
+    const efforts = claudeEffortsFor(caps);
+    const capacity = claudeCapacity(caps, config.claudeContextWindow);
     return {
       tier,
       id,
-      description: id,
+      description: caps ? `${id}; ${caps.contextWindow} context tokens` : id,
       efforts,
-      defaultEffort: undefined,
+      defaultEffort: caps?.defaultEffort,
+      capacity,
     };
   });
 }
@@ -122,12 +127,13 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
   const states = new Map<string, ClaudeState>();
   const locks = new Map<string, Promise<unknown>>();
+  const cachedCandidates = claudeCandidatesFor(config);
 
   async function prepare(body: ClaudeBody, signal?: AbortSignal) {
     const key = claudeConversationKey(body);
     const previous = locks.get(key) ?? Promise.resolve();
     const job = previous.catch(() => {}).then(async () => {
-      const candidates = claudeCandidatesFor(config);
+      const candidates = cachedCandidates;
       let state = states.get(key);
       if (!state) {
         const startCandidate = candidates.find(c => c.tier === config.startTier) ?? candidates.find(c => c.tier === "fast")!;
@@ -140,7 +146,32 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         const match = candidates.find(c => c.id === body.model);
         state.model = body.model;
         state.tier = match?.tier ?? state.tier;
+        // Explicit physical-model bypass: preserve client-supplied effort.
+        // Only strip incompatible fields for budgeted models; do not inject defaults.
+        const caps = lookupCapabilities(body.model);
+        if (caps?.thinkingMode === "budgeted") {
+          resolveClaudeThinking(undefined, caps, body as Record<string, unknown>);
+        }
         return { key, state, notice: undefined as string | undefined, noticeKey: undefined as string | undefined };
+      }
+
+      // Estimate context size: messages + system + tool overhead
+      const systemOverhead = typeof body.system === "string" ? body.system.length : Array.isArray(body.system) ? body.system.reduce((s, b) => s + (b.text?.length ?? 0), 0) : 0;
+      const toolsOverhead = Array.isArray((body as Record<string, unknown>).tools) ? JSON.stringify((body as Record<string, unknown>).tools).length : 0;
+      const contextTokens = Math.round((JSON.stringify(body.messages).length + systemOverhead + toolsOverhead) / 4);
+      const outputReserve = body.max_tokens ?? 16_384;
+
+      // Eligibility: filter candidates that can fit this request
+      const eligibility = checkEligibility(candidates, contextTokens, outputReserve);
+      const eligibleCandidates = eligibility.eligible.length > 0
+        ? [...eligibility.eligible, ...eligibility.unknown]
+        : eligibility.unknown.length > 0
+          ? eligibility.unknown
+          : null;
+
+      if (!eligibleCandidates) {
+        const reasons = eligibility.rejected.map(r => `${r.candidate.id} (${r.candidate.tier}): ${r.reason}`).join("; ");
+        throw new Error(`No Claude model can fit this request. Estimated ${contextTokens} context tokens + ${outputReserve} output reserve. Rejected: ${reasons}. Compact the conversation or configure a larger model.`);
       }
 
       const turn = claudeNewTurn(body);
@@ -159,9 +190,9 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           prompt: turn.prompt,
           currentTier,
           currentModel,
-          currentEffort: undefined,
-          contextTokens: Math.round(JSON.stringify(body.messages).length / 4),
-          candidates,
+          currentEffort: state.lastEffort,
+          contextTokens,
+          candidates: eligibleCandidates,
           ...(config.sendRecentContext ? { recentContext: claudeRecentContext(body) } : {}),
           cache,
           agent: "claude" as const,
@@ -174,11 +205,19 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
         const modelAnswer = result.response?.answers?.model;
         const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence) && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1 ? modelAnswer.confidence : null;
-        const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, candidates, config.minConfidence);
-        const selected = candidates.find(c => c.tier === decision.tier)!;
+        const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, eligibleCandidates, config.minConfidence, CLAUDE_OVERRIDE_ALIASES);
+        const selected = eligibleCandidates.find(c => c.tier === decision.tier) ?? eligibleCandidates[0] ?? candidates[0];
+
+        // Effort normalization: prefer JEV confident choice, then preserve last effort if supported, then model default
+        const effortAnswer = result.response?.answers?.reasoning_effort;
+        const desiredEffort = effortAnswer?.type === "choice" && Number.isFinite(effortAnswer.confidence) && effortAnswer.confidence >= 0 && effortAnswer.confidence <= 1 && effortAnswer.confidence >= config.minConfidence ? effortAnswer.choice : undefined;
+        const selectedCaps = lookupCapabilities(selected.id);
+        const effortToApply = desiredEffort ?? state.lastEffort;
+        const effectiveEffort = resolveClaudeThinking(effortToApply, selectedCaps, body as Record<string, unknown>);
 
         state.model = selected.id;
-        state.tier = decision.tier;
+        state.tier = selected.tier;
+        state.lastEffort = effectiveEffort;
         state.lastTurn = turnKey;
 
         const id = randomUUID();
@@ -186,7 +225,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
         const jevUsage = result.response?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
         const feedbackValues: FeedbackValues = {
-          tier: selected.tier, model: selected.id, effort: undefined, decision: decisionLabel(decision.reason), confidence,
+          tier: selected.tier, model: selected.id, effort: effectiveEffort, decision: decisionLabel(decision.reason), confidence,
           previous_model: currentModel, cache_read: lastUsage?.read ?? null, cache_write: lastUsage?.created ?? null,
           jev_tokens_input: typeof jevUsage?.input_tokens === "number" && Number.isFinite(jevUsage.input_tokens) ? jevUsage.input_tokens : undefined,
           jev_tokens_output: typeof jevUsage?.output_tokens === "number" && Number.isFinite(jevUsage.output_tokens) ? jevUsage.output_tokens : undefined,
@@ -196,10 +235,19 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         state.notice = notice;
         state.noticeKey = noticeKey;
 
-        history.append({ id, at: new Date().toISOString(), conversation: key, turn: turnKey, prompt: turn.prompt, jev: result, previous: { tier: currentTier, model: currentModel }, decision: { ...decision, model: selected.id }, cache });
-      } else if (turn) {
-        notice = state.notice;
-        noticeKey = state.noticeKey;
+        history.append({ id, at: new Date().toISOString(), conversation: key, turn: turnKey, prompt: turn.prompt, jev: result, previous: { tier: currentTier, model: currentModel }, decision: { ...decision, model: selected.id, effort: effectiveEffort ?? null }, cache });
+      } else {
+        // Same-turn continuation or non-user-message: reuse existing notice
+        if (turn) {
+          notice = state.notice;
+          noticeKey = state.noticeKey;
+        }
+        // Re-apply effort on non-routing paths (same-turn continuations, tool rounds)
+        // to ensure output_config.effort is consistent even when routing is skipped
+        const currentCaps = lookupCapabilities(state.model);
+        if (currentCaps) {
+          resolveClaudeThinking(state.lastEffort, currentCaps, body as Record<string, unknown>);
+        }
       }
 
       body.model = state.model;
@@ -245,7 +293,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: "model: field is required and must be a non-empty string" } }, { status: 400 });
         }
 
-        if (body.model === CLAUDE_SENTINEL && !claudeCandidatesFor(config).length) {
+        if (body.model === CLAUDE_SENTINEL && !cachedCandidates.length) {
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: "No Claude model candidates configured" } }, { status: 400 });
         }
 

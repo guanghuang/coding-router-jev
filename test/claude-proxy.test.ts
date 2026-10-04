@@ -449,3 +449,276 @@ test("proxy error type is proxy_error, distinct from upstream api_error", async 
     expect(data.error.type).toBe("proxy_error");
   } finally { proxy.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("large context excludes small-capacity candidates from routing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-eligibility-"));
+  const inputs: RoutingInput[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    const body = await req.json() as ClaudeBody;
+    return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
+    CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-sonnet-5-5",
+    CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-5-5",
+  });
+  const route: Route = async input => { inputs.push(input); return result(input, "balanced"); };
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    // Large payload: ~300K chars → ~75K tokens estimate. Haiku (200K context - 8192 output = 191808 usable) should still be included.
+    // But a truly oversized payload should exclude Haiku.
+    const bigContent = "x".repeat(800_000); // ~200K tokens estimated
+    await (await send(proxy.port, [{ role: "user", content: bigContent }])).text();
+    expect(inputs).toHaveLength(1);
+    // Haiku should be excluded from eligible candidates
+    expect(inputs[0].candidates.every(c => c.id !== "claude-haiku-4-5-20251001")).toBe(true);
+    // Sonnet 5.5 and Opus 5.5 (1M context) should still be available
+    expect(inputs[0].candidates.some(c => c.id === "claude-sonnet-5-5")).toBe(true);
+    expect(inputs[0].candidates.some(c => c.id === "claude-opus-5-5")).toBe(true);
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("all candidates over capacity returns 400 with actionable error", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-no-eligible-"));
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
+    CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
+    CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
+  });
+  const proxy = startClaudeProxy(config, {
+    upstreamBaseURL: "http://127.0.0.1:1", logDirectory: directory,
+    route: async input => result(input, "fast"),
+  });
+  try {
+    const bigContent = "x".repeat(800_000); // ~200K tokens > Haiku 200K capacity
+    const response = await send(proxy.port, [{ role: "user", content: bigContent }]);
+    expect(response.status).toBe(400);
+    const data = await response.json();
+    expect(data.error.message).toContain("No Claude model can fit");
+    expect(data.error.message).toContain("Compact");
+  } finally { proxy.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("effort normalization applies correct output_config on upstream body", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-effort-"));
+  const captured: ClaudeBody[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as ClaudeBody);
+    return new Response(anthropicStream(captured.at(-1)!.model, "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
+  });
+  const route: Route = async input => ({
+    request: buildRequest(input), ms: 1,
+    response: {
+      model: "fake-jev", usage: { input_tokens: 1, output_tokens: 1 },
+      answers: {
+        model: { type: "choice" as const, choice: "fast", confidence: 0.9, probabilities: {} },
+        reasoning_effort: { type: "choice" as const, choice: "high", confidence: 0.9, probabilities: {} },
+      },
+    },
+  });
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    await (await send(proxy.port, [{ role: "user", content: "hello" }])).text();
+    expect(captured).toHaveLength(1);
+    const body = captured[0] as Record<string, unknown>;
+    expect((body.output_config as Record<string, unknown>)?.effort).toBe("high");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("physical model bypass preserves client-supplied effort for adaptive models", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-bypass-effort-"));
+  const captured: Record<string, unknown>[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as Record<string, unknown>);
+    return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const proxy = startClaudeProxy(configFromEnv({}), {
+    upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
+    route: async input => result(input, "fast"),
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "fake-key", "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-sonnet-5-5", messages: [{ role: "user", content: "hello" }], max_tokens: 1024, stream: true, output_config: { effort: "low" } }),
+    });
+    await response.text();
+    // Client-supplied effort should be preserved, not overwritten to default
+    expect((captured[0].output_config as Record<string, unknown>)?.effort).toBe("low");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Haiku bypass strips incompatible effort from output_config", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-haiku-strip-"));
+  const captured: Record<string, unknown>[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as Record<string, unknown>);
+    return new Response(anthropicStream("claude-haiku-4-5-20251001", "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const proxy = startClaudeProxy(configFromEnv({}), {
+    upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
+    route: async input => result(input, "fast"),
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "fake-key", "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", messages: [{ role: "user", content: "hello" }], max_tokens: 1024, stream: true, output_config: { effort: "high" } }),
+    });
+    await response.text();
+    // Haiku is budgeted: incompatible effort field should be stripped
+    const oc = captured[0].output_config as Record<string, unknown> | undefined;
+    expect(oc?.effort).toBeUndefined();
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Claude override alias 'use sonnet' overrides JEV tier to balanced", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-alias-"));
+  const captured: ClaudeBody[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as ClaudeBody);
+    return new Response(anthropicStream(captured.at(-1)!.model, "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
+    CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-sonnet-5-5",
+    CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-5-5",
+  });
+  const inputs: RoutingInput[] = [];
+  // JEV returns "fast" but override should win
+  const route: Route = async input => { inputs.push(input); return result(input, "fast"); };
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    await (await fetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "fake-key", "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: CLAUDE_SENTINEL, messages: [{ role: "user", content: "use sonnet to fix this" }], max_tokens: 1024, stream: true } as ClaudeBody),
+    })).text();
+    expect(inputs).toHaveLength(1);
+    // Override "use sonnet" → balanced tier → claude-sonnet-5-5 upstream
+    expect(captured[0].model).toBe("claude-sonnet-5-5");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("currentEffort propagates previous turn's effective effort", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-effort-prop-"));
+  const inputs: RoutingInput[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    const body = await req.json() as ClaudeBody;
+    return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
+  });
+  const route: Route = async input => {
+    inputs.push(input);
+    return {
+      request: buildRequest(input), ms: 1,
+      response: {
+        model: "fake-jev", usage: { input_tokens: 1, output_tokens: 1 },
+        answers: {
+          model: { type: "choice" as const, choice: "fast", confidence: 0.9, probabilities: {} },
+          reasoning_effort: { type: "choice" as const, choice: "high", confidence: 0.9, probabilities: {} },
+        },
+      },
+    };
+  };
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    await (await send(proxy.port, [{ role: "user", content: "first turn" }])).text();
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].currentEffort).toBeUndefined();
+
+    await (await send(proxy.port, [
+      { role: "user", content: "first turn" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "second turn" },
+    ])).text();
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1].currentEffort).toBe("high");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("low-confidence JEV effort is ignored and prior effort preserved", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-low-conf-"));
+  const captured: Record<string, unknown>[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as Record<string, unknown>);
+    return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
+    CODING_ROUTER_MIN_CONFIDENCE: "0.5",
+  });
+  let callCount = 0;
+  const route: Route = async input => {
+    callCount++;
+    return {
+      request: buildRequest(input), ms: 1,
+      response: {
+        model: "fake-jev", usage: { input_tokens: 1, output_tokens: 1 },
+        answers: {
+          model: { type: "choice" as const, choice: "fast", confidence: 0.9, probabilities: {} },
+          // First call: confident high effort; second call: low-confidence max effort
+          reasoning_effort: callCount === 1
+            ? { type: "choice" as const, choice: "high", confidence: 0.9, probabilities: {} }
+            : { type: "choice" as const, choice: "max", confidence: 0.1, probabilities: {} },
+        },
+      },
+    };
+  };
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    // First turn: confident "high" effort applied
+    await (await send(proxy.port, [{ role: "user", content: "first" }])).text();
+    expect((captured[0].output_config as Record<string, unknown>)?.effort).toBe("high");
+
+    // Second turn: low-confidence "max" → ignored; prior "high" preserved
+    await (await send(proxy.port, [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "second" },
+    ])).text();
+    expect((captured[1].output_config as Record<string, unknown>)?.effort).toBe("high");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("same-turn continuation re-applies effort from state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-jev-continuation-"));
+  const captured: Record<string, unknown>[] = [];
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+    captured.push(await req.json() as Record<string, unknown>);
+    return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const config = configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
+  });
+  const route: Route = async input => ({
+    request: buildRequest(input), ms: 1,
+    response: {
+      model: "fake-jev", usage: { input_tokens: 1, output_tokens: 1 },
+      answers: {
+        model: { type: "choice" as const, choice: "fast", confidence: 0.9, probabilities: {} },
+        reasoning_effort: { type: "choice" as const, choice: "high", confidence: 0.9, probabilities: {} },
+      },
+    },
+  });
+  const proxy = startClaudeProxy(config, { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  try {
+    // First request: routes and sets effort "high"
+    await (await send(proxy.port, [{ role: "user", content: "implement this" }])).text();
+    expect((captured[0].output_config as Record<string, unknown>)?.effort).toBe("high");
+
+    // Tool continuation (same turn): should re-apply effort
+    await (await send(proxy.port, [
+      { role: "user", content: "implement this" },
+      { role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: "read_file", input: { path: "x" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "file contents" }] },
+    ])).text();
+    // Effort should be re-applied from state.lastEffort
+    expect((captured[1].output_config as Record<string, unknown>)?.effort).toBe("high");
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});

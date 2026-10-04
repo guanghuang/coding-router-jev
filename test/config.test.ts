@@ -31,6 +31,7 @@ describe("configuration", () => {
       sendRecentContext: true,
       feedbackFormat: undefined,
       logRetentionDays: undefined,
+      claudeContextWindow: undefined,
     });
   });
 
