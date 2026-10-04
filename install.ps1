@@ -134,7 +134,7 @@ function Resolve-ReleaseVersion {
     }
 
     try {
-        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
     }
     catch {
         $statusCode = $null
@@ -191,7 +191,7 @@ function Get-ReleaseAsset {
     }
 
     try {
-        Invoke-WebRequest -Uri $dlUrl -OutFile $Destination -Headers $headers -TimeoutSec 120 -ErrorAction Stop
+        Invoke-WebRequest -Uri $dlUrl -OutFile $Destination -Headers $headers -TimeoutSec 120 -UseBasicParsing -ErrorAction Stop
     }
     catch {
         $statusCode = $null

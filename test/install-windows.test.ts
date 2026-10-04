@@ -213,6 +213,7 @@ describe("install.ps1", () => {
       server.stop();
 
       const combined = stdout + stderr;
+      if (exitCode !== 0) console.error("Install stderr:", stderr);
       expect(exitCode).toBe(0);
       expect(combined).toContain("Checksum verified");
       expect(combined).toContain("Installed codex-jev to");
@@ -235,6 +236,7 @@ describe("install.ps1", () => {
       server.stop();
 
       const combined = stdout + stderr;
+      if (exitCode !== 0) console.error("Resolve latest stderr:", stderr);
       expect(exitCode).toBe(0);
       expect(combined).toContain("Resolving latest release...");
       expect(combined).toContain("Latest release: v0.1.0");
