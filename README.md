@@ -487,7 +487,7 @@ Default output is a concise human-readable summary with prompt preview, tier, mo
 
 ### Compiled installation
 
-The release build compiles `jev-logs` as a standalone binary alongside `codex-jev`. No Bun or Python required at runtime.
+The build script compiles `jev-logs` as a standalone binary alongside `codex-jev`. No Bun or Python required at runtime.
 
 ```sh
 bun run build   # produces dist/codex-jev and dist/jev-logs

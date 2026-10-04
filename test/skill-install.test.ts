@@ -42,6 +42,12 @@ describe("skillContent", () => {
     expect(content).not.toContain("\\`\\`\\`");
     expect(content).not.toContain("\\`");
   });
+
+  test("embedded fallback matches bundled SKILL.md", () => {
+    const bundled = readFileSync(join(__dirname, "..", "skills", "jev-logs", "SKILL.md"), "utf-8");
+    const content = skillContent();
+    expect(content).toBe(bundled);
+  });
 });
 
 describe("installSkill", () => {

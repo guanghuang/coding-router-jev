@@ -24,6 +24,7 @@ try {
   delete childEnv.TYPESAFE_BASE_URL;
   delete childEnv.TYPESAFE_DEFAULT_MODEL;
   if (logPath) childEnv.JEV_SESSION_LOG = logPath;
+  else delete childEnv.JEV_SESSION_LOG;
   const child = Bun.spawn(["codex", ...childArgs], {
     stdin: "inherit",
     stdout: "inherit",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -256,7 +256,24 @@ describe("queryLogs", () => {
       await writeFile(path, recordLine(makeRecord()));
       expect(queryLogs(path, { last: 0 })).toContain("Invalid limit");
       expect(queryLogs(path, { last: -1 })).toContain("Invalid limit");
+      expect(queryLogs(path, { last: NaN })).toContain("Invalid limit");
+      expect(queryLogs(path, { last: Infinity })).toContain("Invalid limit");
+      expect(queryLogs(path, { last: -Infinity })).toContain("Invalid limit");
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns error for unreadable file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-logs-test-"));
+    try {
+      const path = join(dir, "test.jsonl");
+      await writeFile(path, recordLine(makeRecord()));
+      await chmod(path, 0o000);
+      const result = queryLogs(path);
+      expect(result).toContain("Could not read");
+    } finally {
+      await chmod(join(dir, "test.jsonl"), 0o644).catch(() => {});
       await rm(dir, { recursive: true, force: true });
     }
   });

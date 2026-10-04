@@ -63,7 +63,7 @@ export function filterRecords(records: LogRecord[], options: QueryOptions): LogR
 
   if (options.filterKeyword) {
     const keyword = options.filterKeyword.toLowerCase();
-    filtered = filtered.filter(r => r.prompt?.toLowerCase()?.includes(keyword) ?? false);
+    filtered = filtered.filter(r => typeof r.prompt === "string" && r.prompt.toLowerCase().includes(keyword));
   }
 
   if (options.filterDate) {
@@ -91,7 +91,8 @@ export function formatSummary(record: LogRecord): string {
   parts.push(`Time: ${time}`);
 
   if (record.prompt !== undefined) {
-    parts.push(`Prompt: ${truncate(record.prompt, 120)}`);
+    const promptText = typeof record.prompt === "string" ? record.prompt : String(record.prompt);
+    parts.push(`Prompt: ${truncate(promptText, 120)}`);
   }
 
   if (record.decision) {
@@ -136,7 +137,8 @@ export function formatDetail(record: LogRecord): string {
   const extras: string[] = [summary];
 
   if (record.prompt !== undefined) {
-    extras.push(`\nFull prompt:\n${record.prompt}`);
+    const promptText = typeof record.prompt === "string" ? record.prompt : String(record.prompt);
+    extras.push(`\nFull prompt:\n${promptText}`);
   }
 
   if (record.previous) {
@@ -158,8 +160,9 @@ export function queryLogs(filePath: string, options: QueryOptions = {}): string 
   let content: string;
   try {
     content = readFileSync(filePath, "utf-8");
-  } catch {
-    return "Could not read the session log file.";
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown error";
+    return `Could not read the session log file: ${reason}`;
   }
 
   if (!content.trim()) {
@@ -185,7 +188,7 @@ export function queryLogs(filePath: string, options: QueryOptions = {}): string 
   }
 
   const limit = options.last ?? 1;
-  if (limit <= 0) {
+  if (!Number.isFinite(limit) || limit <= 0) {
     return "Invalid limit: must be a positive number.";
   }
   const selected = filtered.slice(-limit);
@@ -224,8 +227,12 @@ Options:
   for (let i = 1; i < args.length; i++) {
     switch (args[i]) {
       case "--last": {
-        const n = parseInt(args[++i] ?? "", 10);
-        options.last = Number.isNaN(n) ? undefined : n;
+        const raw = args[++i] ?? "";
+        const n = parseInt(raw, 10);
+        if (raw === "" || Number.isNaN(n)) {
+          return { error: `Invalid --last value: "${raw}". Must be a positive integer.` };
+        }
+        options.last = n;
         break;
       }
       case "--filter-tier":
@@ -252,12 +259,18 @@ Options:
   return { filePath, options };
 }
 
+const ERROR_PREFIXES = ["No active session log", "Could not read", "The session log is empty", "The session log contains no valid", "No records match", "No matching records", "Invalid limit"];
+
 if (import.meta.main) {
   const result = parseArgs(process.argv);
   if ("error" in result) {
     console.log(result.error);
     process.exitCode = result.error.startsWith("Usage:") ? 0 : 1;
   } else {
-    console.log(queryLogs(result.filePath, result.options));
+    const output = queryLogs(result.filePath, result.options);
+    console.log(output);
+    if (ERROR_PREFIXES.some(p => output.startsWith(p))) {
+      process.exitCode = 1;
+    }
   }
 }
