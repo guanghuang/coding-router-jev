@@ -45,8 +45,3 @@ export function isToolResult(message: ClaudeMessage): boolean {
   if (typeof message.content === "string") return false;
   return message.content.some(block => block.type === "tool_result");
 }
-
-export function isToolUse(message: ClaudeMessage): boolean {
-  if (typeof message.content === "string") return false;
-  return message.content.some(block => block.type === "tool_use");
-}

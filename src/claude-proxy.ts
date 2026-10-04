@@ -1,12 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { createHash } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type { Config } from "./config";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult } from "./router";
 import { formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
-import { TIERS, type Candidate, type Tier } from "./types";
-import { textOfMessage, isToolResult, type ClaudeBody, type ClaudeMessage } from "./claude-types";
+import { TIERS, type Candidate, type RecentContext, type Tier } from "./types";
+import { textOfMessage, isToolResult, type ClaudeBody } from "./claude-types";
 
 export const CLAUDE_SENTINEL = "coding-router-jev";
 
@@ -36,14 +35,14 @@ function summarizeClaudeCacheRun(observations: ClaudeUsageObs[], currentModel: s
   return result;
 }
 
-const hashStr = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 24);
+const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 24);
 
 function claudeConversationKey(body: ClaudeBody): string {
   const metadata = body.metadata as Record<string, unknown> | undefined;
   const id = metadata?.session_id ?? metadata?.conversation_id;
   const firstUser = body.messages.find(m => m.role === "user");
   const systemText = typeof body.system === "string" ? body.system : Array.isArray(body.system) ? body.system.map(b => b.text).join("") : "";
-  return hashStr(String(id ?? `${systemText}|${firstUser ? textOfMessage(firstUser) : ""}`));
+  return hash(String(id ?? `${systemText}|${firstUser ? textOfMessage(firstUser) : ""}`));
 }
 
 function claudeNewTurn(body: ClaudeBody): { prompt: string; anchor: string } | undefined {
@@ -56,19 +55,19 @@ function claudeNewTurn(body: ClaudeBody): { prompt: string; anchor: string } | u
       if (isToolResult(msg)) return;
       const text = textOfMessage(msg).trim();
       if (!text) continue;
-      // Build anchor from all user texts up to and including this one
       const userTexts: string[] = [];
       for (let j = 0; j <= i; j++) {
         if (messages[j].role === "user") userTexts.push(textOfMessage(messages[j]));
       }
-      return { prompt: text, anchor: hashStr(JSON.stringify(userTexts)) };
+      return { prompt: text, anchor: hash(JSON.stringify(userTexts)) };
     }
   }
 }
 
-function claudeRecentContext(body: ClaudeBody): { previous_user_request: string; previous_assistant_excerpt?: string } | undefined {
+function claudeRecentContext(body: ClaudeBody): RecentContext | undefined {
   const msgs = body.messages.filter(m => !isToolResult(m) && textOfMessage(m).trim());
   const currentIdx = msgs.findLastIndex(m => m.role === "user");
+  if (currentIdx < 0) return;
   const prevIdx = msgs.slice(0, currentIdx).findLastIndex(m => m.role === "user");
   if (prevIdx < 0) return;
   const assistant = msgs.slice(prevIdx + 1, currentIdx).findLast(m => m.role === "assistant");
@@ -91,7 +90,6 @@ type ClaudeState = {
 export function claudeCandidatesFor(config: Config): Candidate[] {
   return TIERS.filter(tier => tier !== "long" || config.longModelEnabled).map(tier => {
     const id = config.claudeModels[tier];
-    // Claude models don't have traditional reasoning levels in the same way
     const efforts: string[] = [];
     return {
       tier,
@@ -106,10 +104,9 @@ export function claudeCandidatesFor(config: Config): Candidate[] {
 const BEDROCK_RE = /\.amazonaws\.com/i;
 const VERTEX_RE = /aiplatform\.googleapis\.com/i;
 
-export function claudeArgs(baseURL: string, args: string[]): { args: string[]; env: Record<string, string> } {
+export function claudeArgs(baseURL: string, args: string[]): string[] {
   const hasModel = args.some(arg => ["--model", "-m"].includes(arg) || arg.startsWith("--model=") || /^-m.+/.test(arg));
-  const childArgs = [...(hasModel ? [] : ["--model", CLAUDE_SENTINEL]), ...args];
-  return { args: childArgs, env: { ANTHROPIC_BASE_URL: baseURL } };
+  return [...(hasModel ? [] : ["--model", CLAUDE_SENTINEL]), ...args];
 }
 
 export function startClaudeProxy(config: Config, options: { route?: Route; upstreamBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void } = {}) {
@@ -120,9 +117,8 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
   const upstreamBase = options.upstreamBaseURL ?? process.env.ANTHROPIC_UPSTREAM_URL ?? "https://api.anthropic.com";
 
-  // Detect unsupported providers
-  if (BEDROCK_RE.test(upstreamBase)) throw new Error("Bedrock transport is not supported by claude-jev. Use the native Claude CLI with Bedrock directly, or set ANTHROPIC_BASE_URL to the Anthropic API.");
-  if (VERTEX_RE.test(upstreamBase)) throw new Error("Vertex AI transport is not supported by claude-jev. Use the native Claude CLI with Vertex directly, or set ANTHROPIC_BASE_URL to the Anthropic API.");
+  if (BEDROCK_RE.test(upstreamBase)) throw new Error("[Jev] Bedrock transport is not supported by claude-jev. Use the native Claude CLI with Bedrock directly, or set ANTHROPIC_BASE_URL to the Anthropic API.");
+  if (VERTEX_RE.test(upstreamBase)) throw new Error("[Jev] Vertex AI transport is not supported by claude-jev. Use the native Claude CLI with Vertex directly, or set ANTHROPIC_BASE_URL to the Anthropic API.");
 
   const states = new Map<string, ClaudeState>();
   const locks = new Map<string, Promise<unknown>>();
@@ -140,7 +136,6 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         if (states.size > 100) states.delete(states.keys().next().value!);
       }
 
-      // Physical model bypass: if caller specified a non-sentinel model, pass through
       if (body.model !== CLAUDE_SENTINEL) {
         const match = candidates.find(c => c.id === body.model);
         state.model = body.model;
@@ -224,7 +219,6 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           return new Response(null, { status: 200 });
         }
 
-        // Forward non-messages endpoints unchanged
         if (request.method !== "POST" || !path.endsWith("/messages")) {
           const headers = new Headers(request.headers);
           for (const name of ["host", "content-length", "transfer-encoding", "connection", "accept-encoding"]) headers.delete(name);
@@ -235,10 +229,20 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           return new Response(response.body, { status: response.status, headers: responseHeaders });
         }
 
-        // POST /v1/messages
+        // POST /v1/messages — validate request body
         let body: ClaudeBody;
         try { body = JSON.parse(await request.text()); }
         catch { return Response.json({ type: "error", error: { type: "invalid_request_error", message: "Invalid JSON request" } }, { status: 400 }); }
+
+        if (!body || typeof body !== "object") {
+          return Response.json({ type: "error", error: { type: "invalid_request_error", message: "Request body must be a JSON object" } }, { status: 400 });
+        }
+        if (!Array.isArray(body.messages)) {
+          return Response.json({ type: "error", error: { type: "invalid_request_error", message: "messages: field is required and must be an array" } }, { status: 400 });
+        }
+        if (!body.model || typeof body.model !== "string") {
+          return Response.json({ type: "error", error: { type: "invalid_request_error", message: "model: field is required and must be a non-empty string" } }, { status: 400 });
+        }
 
         if (body.model === CLAUDE_SENTINEL && !claudeCandidatesFor(config).length) {
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: "No Claude model candidates configured" } }, { status: 400 });
@@ -264,13 +268,11 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           return new Response(response.body, { status: response.status, headers: responseHeaders });
         }
 
-        // Observe streaming for usage data
         const contentType = response.headers.get("content-type");
         if (contentType?.includes("text/event-stream") && response.body) {
           return new Response(observeClaudeStream(response.body, prepared.state, body.model), { status: response.status, headers: responseHeaders });
         }
 
-        // Non-streaming JSON response — extract usage
         if (contentType?.includes("application/json")) {
           const data = await response.arrayBuffer();
           try {
@@ -293,7 +295,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
         return new Response(response.body, { status: response.status, headers: responseHeaders });
       } catch (error) {
-        return Response.json({ type: "error", error: { type: "api_error", message: error instanceof Error ? error.message : "Upstream request failed" } }, { status: 502 });
+        return Response.json({ type: "error", error: { type: "proxy_error", message: error instanceof Error ? error.message : "Upstream request failed" } }, { status: 502 });
       }
     },
   });
