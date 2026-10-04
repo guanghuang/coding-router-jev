@@ -9,7 +9,6 @@ import {
   formatDetail,
   queryLogs,
   type LogRecord,
-  type QueryOptions,
 } from "../src/jev-logs";
 
 function makeRecord(overrides: Partial<LogRecord> = {}): LogRecord {
@@ -105,6 +104,19 @@ describe("filterRecords", () => {
   test("combines filters", () => {
     expect(filterRecords(records, { filterTier: "strong", filterKeyword: "debug" })).toHaveLength(1);
     expect(filterRecords(records, { filterTier: "fast", filterKeyword: "debug" })).toHaveLength(0);
+  });
+
+  test("handles sparse records without crashing", () => {
+    const sparse: LogRecord[] = [
+      { id: "1" },
+      { id: "2", decision: {} },
+      { id: "3", decision: { tier: "fast" } },
+    ];
+    expect(filterRecords(sparse, { filterTier: "fast" })).toHaveLength(1);
+    expect(filterRecords(sparse, { filterModel: "gpt" })).toHaveLength(0);
+    expect(filterRecords(sparse, { filterDecision: "jev" })).toHaveLength(0);
+    expect(filterRecords(sparse, { filterKeyword: "test" })).toHaveLength(0);
+    expect(filterRecords(sparse, { filterDate: "2026" })).toHaveLength(0);
   });
 });
 

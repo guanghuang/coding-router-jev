@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installSkill, skillTargetDir } from "../src/skill-install";
+import { installSkill, skillTargetDir, skillContent } from "../src/skill-install";
 
 const MANAGED_HEADER = "<!-- managed by coding-router-jev -->";
 
@@ -24,6 +24,23 @@ describe("skillTargetDir", () => {
   test("ignores empty CODEX_HOME", () => {
     const dir = skillTargetDir({ CODEX_HOME: "  " });
     expect(dir).toContain(".codex");
+  });
+});
+
+describe("skillContent", () => {
+  test("returns non-empty content with managed header", () => {
+    const content = skillContent();
+    expect(content.length).toBeGreaterThan(0);
+    expect(content).toContain("<!-- managed by coding-router-jev -->");
+    expect(content).toContain("jev-logs");
+  });
+
+  test("embedded skill has proper backtick fences", () => {
+    const content = skillContent();
+    expect(content).toContain("```sh");
+    expect(content).toContain("```");
+    expect(content).not.toContain("\\`\\`\\`");
+    expect(content).not.toContain("\\`");
   });
 });
 
@@ -150,6 +167,23 @@ describe("installSkill", () => {
       expect(result.installed).toBe(true);
       expect(existsSync(result.path)).toBe(true);
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("handles unwritable directory gracefully", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-skill-test-"));
+    try {
+      await chmod(dir, 0o444);
+      const result = installSkill({
+        env: { CODEX_HOME: dir },
+        content: SKILL_CONTENT,
+        silent: true,
+      });
+      expect(result.installed).toBe(false);
+      expect(result.reason).toContain("error:");
+    } finally {
+      await chmod(dir, 0o755);
       await rm(dir, { recursive: true, force: true });
     }
   });

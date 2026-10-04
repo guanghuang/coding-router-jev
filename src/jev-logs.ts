@@ -53,17 +53,17 @@ export function filterRecords(records: LogRecord[], options: QueryOptions): LogR
 
   if (options.filterModel) {
     const model = options.filterModel.toLowerCase();
-    filtered = filtered.filter(r => r.decision?.model?.toLowerCase().includes(model));
+    filtered = filtered.filter(r => r.decision?.model?.toLowerCase()?.includes(model) ?? false);
   }
 
   if (options.filterDecision) {
     const decision = options.filterDecision.toLowerCase();
-    filtered = filtered.filter(r => r.decision?.reason?.toLowerCase().includes(decision));
+    filtered = filtered.filter(r => r.decision?.reason?.toLowerCase()?.includes(decision) ?? false);
   }
 
   if (options.filterKeyword) {
     const keyword = options.filterKeyword.toLowerCase();
-    filtered = filtered.filter(r => r.prompt?.toLowerCase().includes(keyword));
+    filtered = filtered.filter(r => r.prompt?.toLowerCase()?.includes(keyword) ?? false);
   }
 
   if (options.filterDate) {
@@ -86,7 +86,8 @@ function formatValue(value: unknown): string {
 
 export function formatSummary(record: LogRecord): string {
   const parts: string[] = [];
-  const time = record.at ? new Date(record.at).toLocaleString() : "unknown time";
+  const parsed = record.at ? new Date(record.at) : null;
+  const time = parsed && !isNaN(parsed.getTime()) ? parsed.toLocaleString() : "unknown time";
   parts.push(`Time: ${time}`);
 
   if (record.prompt !== undefined) {
@@ -102,7 +103,7 @@ export function formatSummary(record: LogRecord): string {
 
   if (record.jev?.response?.answers?.model) {
     const confidence = record.jev.response.answers.model.confidence;
-    parts.push(`Confidence: ${confidence !== null && confidence !== undefined ? confidence.toFixed(2) : "unavailable"}`);
+    parts.push(`Confidence: ${typeof confidence === "number" && isFinite(confidence) ? confidence.toFixed(2) : "unavailable"}`);
   } else {
     parts.push(`Confidence: unavailable`);
   }
@@ -222,9 +223,11 @@ Options:
 
   for (let i = 1; i < args.length; i++) {
     switch (args[i]) {
-      case "--last":
-        options.last = parseInt(args[++i] ?? "", 10) || undefined;
+      case "--last": {
+        const n = parseInt(args[++i] ?? "", 10);
+        options.last = Number.isNaN(n) ? undefined : n;
         break;
+      }
       case "--filter-tier":
         options.filterTier = args[++i];
         break;
