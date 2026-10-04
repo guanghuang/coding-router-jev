@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 export const DEFAULT_LOG_DIR = join(tmpdir(), "coding-router-jev");
 
 export type AgentPrefix = "codex" | "pi";
-const SUPPORTED_PREFIXES: ReadonlySet<string> = new Set<AgentPrefix>(["codex", "pi"]);
+const SUPPORTED_PREFIXES: ReadonlySet<AgentPrefix> = new Set<AgentPrefix>(["codex", "pi"]);
 
 const AGENT_LOG_PATTERNS: Record<AgentPrefix, RegExp> = {
   codex: /^codex-.+\.jsonl$/,
@@ -14,8 +14,11 @@ const AGENT_LOG_PATTERNS: Record<AgentPrefix, RegExp> = {
 
 export function cleanupStaleLogs(directory: string, retentionDays: number, agent: AgentPrefix = "codex"): void {
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) return;
+  if (!SUPPORTED_PREFIXES.has(agent)) {
+    console.error(`[Jev] unsupported agent prefix for cleanup: ${agent}`);
+    return;
+  }
   const pattern = AGENT_LOG_PATTERNS[agent];
-  if (!pattern) return;
   let entries: string[];
   try {
     entries = readdirSync(directory);

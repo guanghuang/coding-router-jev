@@ -18,7 +18,7 @@ function filterByBranch(records: LogRecord[], branch: string): LogRecord[] {
   return records.filter(r => r.branch === branch);
 }
 
-function mergeObservations(
+export function mergeObservations(
   decisions: LogRecord[],
   observations: ResponseObservation[],
 ): LogRecord[] {
@@ -33,19 +33,22 @@ function mergeObservations(
     if (!obs) return d;
     const merged: LogRecord = { ...d };
     if (!merged.cache) merged.cache = {};
-    if (obs.input_tokens !== undefined || obs.output_tokens !== undefined) {
-      merged.cache = {
-        ...merged.cache,
-        agent_usage: {
-          input_tokens: obs.input_tokens,
-          output_tokens: obs.output_tokens,
-          cache_read_tokens: obs.cache_read_tokens,
-          cache_write_tokens: obs.cache_write_tokens,
-        },
-      };
+    const agentUsage: Record<string, unknown> = {};
+    if (obs.input_tokens !== undefined) agentUsage.input_tokens = obs.input_tokens;
+    if (obs.output_tokens !== undefined) agentUsage.output_tokens = obs.output_tokens;
+    if (obs.cache_read_tokens !== undefined) agentUsage.cache_read_tokens = obs.cache_read_tokens;
+    if (obs.cache_write_tokens !== undefined) agentUsage.cache_write_tokens = obs.cache_write_tokens;
+    if (Object.keys(agentUsage).length > 0) {
+      merged.cache = { ...merged.cache, agent_usage: agentUsage };
     }
     return merged;
   });
+}
+
+function isDecisionRecord(record: unknown): record is LogRecord {
+  if (!record || typeof record !== "object" || isObservation(record)) return false;
+  const r = record as Record<string, unknown>;
+  return (r.id !== undefined || r.at !== undefined || r.decision !== undefined);
 }
 
 export function piQueryLogs(filePath: string, options: PiQueryOptions = {}): string {
@@ -65,33 +68,27 @@ export function piQueryLogs(filePath: string, options: PiQueryOptions = {}): str
     return "The session log is empty. No routing decisions have been recorded yet.";
   }
 
-  const allParsed: (LogRecord | ResponseObservation)[] = [];
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const obj = JSON.parse(trimmed);
-      allParsed.push(obj);
-    } catch {
-      // skip malformed lines
-    }
+  const allParsed = parseRecords(content);
+  const observations: ResponseObservation[] = [];
+  const decisions: LogRecord[] = [];
+  for (const record of allParsed) {
+    if (isObservation(record)) observations.push(record as unknown as ResponseObservation);
+    else if (isDecisionRecord(record)) decisions.push(record);
   }
-
-  const observations = allParsed.filter(isObservation) as ResponseObservation[];
-  let decisions = allParsed.filter(r => !isObservation(r)) as LogRecord[];
 
   if (decisions.length === 0) {
     return "The session log contains no valid decision records.";
   }
 
+  let filtered = decisions;
   if (options.branch) {
-    decisions = filterByBranch(decisions, options.branch);
-    if (decisions.length === 0) {
+    filtered = filterByBranch(filtered, options.branch);
+    if (filtered.length === 0) {
       return `No decision records found for branch "${options.branch}".`;
     }
   }
 
-  const filtered = filterRecords(decisions, options);
+  filtered = filterRecords(filtered, options);
   if (filtered.length === 0) {
     const appliedFilters: string[] = [];
     if (options.filterTier) appliedFilters.push(`tier=${options.filterTier}`);

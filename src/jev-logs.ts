@@ -164,6 +164,17 @@ export function formatSummary(record: LogRecord): string {
         parts.push(`Cache: ${formatValue(last.cache_read_tokens)} read / ${formatValue(last.cache_created_tokens)} write`);
       }
     }
+    const agentUsage = record.cache.agent_usage as { input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number } | undefined;
+    if (agentUsage) {
+      const usageParts: string[] = [];
+      if (agentUsage.input_tokens !== undefined) usageParts.push(`${agentUsage.input_tokens} in`);
+      if (agentUsage.output_tokens !== undefined) usageParts.push(`${agentUsage.output_tokens} out`);
+      if (agentUsage.cache_read_tokens !== undefined) usageParts.push(`${agentUsage.cache_read_tokens} cache read`);
+      if (agentUsage.cache_write_tokens !== undefined) usageParts.push(`${agentUsage.cache_write_tokens} cache write`);
+      if (usageParts.length > 0) {
+        parts.push(`Agent usage: ${usageParts.join(" / ")}`);
+      }
+    }
   }
 
   if (record.jev?.error) {

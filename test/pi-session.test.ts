@@ -591,3 +591,170 @@ describe("validateSavedState edge cases", () => {
     expect(validateSavedState({ ...savedState(), modelId: "" }, registry)).toBeNull();
   });
 });
+
+describe("history and feedback integration", () => {
+  function fakeHistory(): { path: string; append: (record: unknown) => void; records: unknown[] } {
+    const records: unknown[] = [];
+    return { path: "/tmp/test.jsonl", append: (r) => records.push(r), records };
+  }
+
+  test("user resolve appends decision record to history", async () => {
+    const hist = fakeHistory();
+    const adapter = makeAdapter({ tier: "fast", effort: "medium", confidence: 0.9, onResult: undefined });
+    const adapterWithHistory = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      history: hist,
+      sessionId: "test-sess",
+      branchId: "main",
+    });
+    await adapterWithHistory.resolveModel({ reason: "user", text: "hello world" });
+    expect(hist.records).toHaveLength(1);
+    const rec = hist.records[0] as Record<string, unknown>;
+    expect(rec.agent).toBe("pi");
+    expect(rec.session).toBe("test-sess");
+    expect(rec.branch).toBe("main");
+    expect(rec.prompt).toBe("hello world");
+    expect(rec.id).toMatch(/^pi-test-sess-\d+$/);
+    expect(rec.provider_model).toBeDefined();
+    expect(rec.decision).toBeDefined();
+    expect(rec.effective_effort).toBeDefined();
+  });
+
+  test("continuation does not append to history", async () => {
+    const hist = fakeHistory();
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      history: hist,
+      sessionId: "test-sess",
+    });
+    await adapter.resolveModel({
+      reason: "continuation",
+      previous: { provider: "openai-codex", modelId: "gpt-6.1-sol", thinkingLevel: "high" },
+    });
+    expect(hist.records).toHaveLength(0);
+  });
+
+  test("empty prompt does not append to history", async () => {
+    const hist = fakeHistory();
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      history: hist,
+      sessionId: "test-sess",
+    });
+    await adapter.resolveModel({ reason: "user", text: "" });
+    expect(hist.records).toHaveLength(0);
+  });
+
+  test("onNotify is called for user resolves with decision", async () => {
+    const notifications: string[] = [];
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      onNotify: (msg) => notifications.push(msg),
+      sessionId: "test-sess",
+    });
+    await adapter.resolveModel({ reason: "user", text: "test notify" });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toContain("tier:");
+  });
+
+  test("onNotify is not called for continuation/retry/direct", async () => {
+    const notifications: string[] = [];
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      onNotify: (msg) => notifications.push(msg),
+    });
+    await adapter.resolveModel({
+      reason: "continuation",
+      previous: { provider: "openai-codex", modelId: "gpt-6.1-sol" },
+    });
+    await adapter.resolveModel({
+      reason: "retry",
+      failed: { provider: "openai-codex", modelId: "gpt-6.1-sol" },
+    });
+    await adapter.resolveModel({
+      reason: "direct",
+      previous: { provider: "openai-codex", modelId: "gpt-6.1-sol" },
+    });
+    expect(notifications).toHaveLength(0);
+  });
+
+  test("throwing onNotify does not crash resolveModel", async () => {
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      onNotify: () => { throw new Error("notification failure"); },
+      sessionId: "test-sess",
+    });
+    const result = await adapter.resolveModel({ reason: "user", text: "should not crash" });
+    expect(result.tier).toBeDefined();
+  });
+
+  test("recordObservation appends observation record", async () => {
+    const hist = fakeHistory();
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      history: hist,
+      sessionId: "test-sess",
+      branchId: "main",
+    });
+    await adapter.resolveModel({ reason: "user", text: "trigger decision" });
+    expect(hist.records).toHaveLength(1);
+
+    adapter.recordObservation({ inputTokens: 5000, outputTokens: 1200 });
+    expect(hist.records).toHaveLength(2);
+    const obs = hist.records[1] as Record<string, unknown>;
+    expect(obs.type).toBe("response-observation");
+    expect(obs.agent).toBe("pi");
+    expect(obs.decision_id).toBe(adapter.lastDecisionId);
+    expect(obs.input_tokens).toBe(5000);
+    expect(obs.output_tokens).toBe(1200);
+  });
+
+  test("recordObservation no-ops without history", async () => {
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+    });
+    expect(() => adapter.recordObservation({ inputTokens: 100 })).not.toThrow();
+  });
+
+  test("persisted jev record contains confidence from answers", async () => {
+    const hist = fakeHistory();
+    const adapter = createPiAdapter({
+      config: defaultConfig(),
+      route: fakeRoute("fast", "medium", 0.9),
+      registry: fakeRegistry(DEFAULT_MODELS),
+      clamp: fakeClamp(DEFAULT_LEVELS),
+      history: hist,
+      sessionId: "test-sess",
+    });
+    await adapter.resolveModel({ reason: "user", text: "test confidence persistence" });
+    const rec = hist.records[0] as Record<string, unknown>;
+    const jev = rec.jev as Record<string, unknown>;
+    expect(jev).toBeDefined();
+    const response = jev.response as Record<string, unknown>;
+    expect(response.answers).toBeDefined();
+  });
+});

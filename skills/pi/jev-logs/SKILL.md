@@ -30,6 +30,11 @@ reads only the active session's JSONL log and returns formatted results.
 Do not shell out to a globally installed Bun CLI, scan all logs, or
 access other sessions.
 
+The `jev_logs` tool is registered by the Pi extension when the package
+is enabled. It delegates to `piQueryLogs()` from `src/pi-logs.ts`,
+bound to the active session's log path. The tool accepts only the
+active session — arbitrary file paths are not exposed.
+
 ## Tool usage
 
 ### Show the latest decision

@@ -215,6 +215,23 @@ export type PiHistoryHandle = {
 
 export type PiNotify = (message: string) => void;
 
+type PiDecisionLogMeta = {
+  reason?: string;
+  prompt?: string;
+  requestedEffort?: string;
+  capacityStatus?: string;
+  capacityReason?: string;
+  jevUsage?: { input_tokens?: number; output_tokens?: number };
+  jevMs?: number;
+  jevResponse?: unknown;
+  jevError?: string;
+  jevAnswers?: unknown;
+  previousTier?: string;
+  previousModel?: string;
+  previousEffort?: string | null;
+  cache?: Record<string, unknown>;
+};
+
 type CreateAdapterOptions = {
   config?: Config;
   route?: Route;
@@ -236,6 +253,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
   let state: AdapterState | undefined;
   let pending: Promise<AdapterResult> | undefined;
   let decisionCounter = 0;
+  let lastDecisionId: string | undefined;
 
   function getStartupState(): AdapterState {
     const { candidates, errors } = piCandidatesFor(config, registry);
@@ -344,7 +362,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     const baseMeta = { reason: "user" as const, prompt, previousTier: prevTier, previousModel: prevModel, previousEffort: prevEffort };
 
     if (!prompt) {
-      return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, undefined, undefined, baseMeta);
+      return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false);
     }
 
     const contextEvidence = estimateContextTokens(request);
@@ -397,7 +415,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
 
     if (!result.response) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, "JEV/unavailable", null,
-        { ...baseMeta, jevResponse: null });
+        { ...baseMeta, jevResponse: null, jevError: result.error, jevMs: result.ms });
     }
 
     const modelAnswer = result.response.answers?.model;
@@ -442,8 +460,9 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     };
 
     const jevUsage = result.response.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+    const jevAnswers = result.response.answers;
     return buildResult(selProvider, selModelId, effort, selected.tier, true, decisionLabel(decision.reason), confidence,
-      { ...baseMeta, requestedEffort: desiredEffort, jevUsage, jevMs: result.ms });
+      { ...baseMeta, requestedEffort: desiredEffort, jevUsage, jevMs: result.ms, jevAnswers });
   }
 
   function buildResult(
@@ -454,7 +473,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     fromClassifier: boolean,
     decision?: string,
     confidence?: number | null,
-    meta?: { reason?: string; prompt?: string; requestedEffort?: string; capacityStatus?: string; capacityReason?: string; jevUsage?: { input_tokens?: number; output_tokens?: number }; jevMs?: number; jevResponse?: unknown; previousTier?: string; previousModel?: string; previousEffort?: string | null; cache?: Record<string, unknown> },
+    meta?: PiDecisionLogMeta,
   ): AdapterResult {
     const result: AdapterResult = {
       provider,
@@ -470,6 +489,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
 
     if (history && meta?.reason === "user") {
       const decisionId = `pi-${sessionId ?? "unknown"}-${++decisionCounter}`;
+      lastDecisionId = decisionId;
       const record: Record<string, unknown> = {
         id: decisionId,
         at: new Date().toISOString(),
@@ -493,7 +513,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
             effort: meta.previousEffort,
           },
         } : {}),
-        ...(meta.jevUsage ? { jev: { response: { usage: meta.jevUsage }, ms: meta.jevMs } } : meta.jevResponse === null ? { jev: { response: null, error: decision } } : {}),
+        ...(meta.jevUsage || meta.jevAnswers ? { jev: { response: { ...(meta.jevAnswers ? { answers: meta.jevAnswers } : {}), ...(meta.jevUsage ? { usage: meta.jevUsage } : {}) }, ms: meta.jevMs } } : meta.jevResponse === null ? { jev: { response: null, error: meta.jevError ?? decision, ms: meta.jevMs } } : {}),
         ...(meta.capacityStatus ? { capacity_status: meta.capacityStatus } : {}),
         ...(meta.capacityReason ? { capacity_reason: meta.capacityReason } : {}),
         ...(meta.cache ? { cache: meta.cache } : {}),
@@ -502,19 +522,21 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     }
 
     if (onNotify && meta?.reason === "user" && decision !== undefined) {
-      const feedbackValues: FeedbackValues = {
-        tier,
-        model: `${provider}/${modelId}`,
-        effort: thinkingLevel,
-        decision: decision ?? "unknown",
-        confidence: confidence ?? null,
-        previous_model: meta.previousModel ?? "none",
-        cache_read: null,
-        cache_write: null,
-        jev_tokens_input: meta.jevUsage?.input_tokens,
-        jev_tokens_output: meta.jevUsage?.output_tokens,
-      };
-      onNotify(formatFeedback(feedbackFormat, feedbackValues));
+      try {
+        const feedbackValues: FeedbackValues = {
+          tier,
+          model: `${provider}/${modelId}`,
+          effort: thinkingLevel,
+          decision: decision ?? "unknown",
+          confidence: confidence ?? null,
+          previous_model: meta.previousModel ?? "none",
+          cache_read: null,
+          cache_write: null,
+          jev_tokens_input: meta.jevUsage?.input_tokens,
+          jev_tokens_output: meta.jevUsage?.output_tokens,
+        };
+        onNotify(formatFeedback(feedbackFormat, feedbackValues));
+      } catch { console.error("[Jev] feedback notification failed"); }
     }
 
     return result;
@@ -530,13 +552,14 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     cacheWriteTokens?: number;
   }): void {
     if (!history) return;
+    const effectiveDecisionId = obs.decisionId ?? lastDecisionId;
     const record = {
       type: "response-observation" as const,
       at: new Date().toISOString(),
       agent: "pi",
       ...(sessionId ? { session: sessionId } : {}),
       ...(branchId ? { branch: branchId } : {}),
-      ...(obs.decisionId ? { decision_id: obs.decisionId } : {}),
+      ...(effectiveDecisionId ? { decision_id: effectiveDecisionId } : {}),
       ...(obs.turn ? { turn: obs.turn } : {}),
       ...(obs.providerModel ? { provider_model: obs.providerModel } : {}),
       ...(obs.inputTokens !== undefined ? { input_tokens: obs.inputTokens } : {}),
@@ -547,7 +570,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     history.append(record);
   }
 
-  return { resolveModel, recordObservation, get state() { return state; } };
+  return { resolveModel, recordObservation, get lastDecisionId() { return lastDecisionId; }, get state() { return state; } };
 }
 
 const MIN_PI_MAJOR = 1;
