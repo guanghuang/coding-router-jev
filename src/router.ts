@@ -29,6 +29,7 @@ export type RoutingInput = {
   candidates: Candidate[];
   recentContext?: RecentContext;
   cache?: Record<string, JsonValue>;
+  activity?: { last_response_at: string | null; last_response_seconds_ago: number | null };
   agent?: "codex" | "pi" | "claude";
   callerOptions?: CallerOptions;
 };
@@ -44,9 +45,10 @@ export function buildRequest(input: RoutingInput): SystemOneRequest {
         "Choose sufficient capability with the lowest expected total cost. Model names alone do not supply prices, and changing tiers that share a model does not change the underlying model.",
         "Cache observations summarize the current uninterrupted run on the stated exact model, up to one hour; the scan stops at the most recent model switch. Recent positive reads may favor keeping that model for borderline choices; stale observations or zero reads do not establish a warm cache. Missing values mean unknown. Capability takes priority over cache savings.",
         "Changing effort on the same supported model can preserve the cached prefix, but does not guarantee a cache hit. Do not keep an unsuitable effort just to avoid a model switch.",
+        ...(input.activity ? ["Session last_response_seconds_ago measures time since the prior successful agent response. A long idle period weakens any assumption that the current model's cache is still warm; timing alone cannot prove a cache hit or expiration. Do not stay on a more expensive current model solely for presumed cache savings after a long idle period. Prefer the lowest-cost sufficient model for the new task. Null timing means unknown."] : []),
       ].join(" "),
       ...(input.recentContext ? { recent_context: { ...input.recentContext } } : {}),
-      session: { current_tier: input.currentTier, current_model: input.currentModel, current_reasoning_effort: input.currentEffort ?? null, context_tokens: input.contextTokens, ...(input.cache ? { cache: input.cache } : {}) },
+      session: { current_tier: input.currentTier, current_model: input.currentModel, current_reasoning_effort: input.currentEffort ?? null, context_tokens: input.contextTokens, ...(input.activity ?? {}), ...(input.cache ? { cache: input.cache } : {}) },
       environment: { available_models: input.candidates.map(candidate => ({ tier: candidate.tier, model: candidate.id, supported_reasoning_efforts: candidate.efforts })) },
     },
     questions: {

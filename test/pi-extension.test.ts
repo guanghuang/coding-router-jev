@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { configFromEnv, type Config } from "../src/config";
 import {
   createPiAdapter,
+  formatPiStatus,
   piCandidatesFor,
   resolveEffort,
   estimateContextTokens,
@@ -45,6 +46,25 @@ function fakeClamp(levels?: Record<string, PiThinkingLevel[]>): PiClamp {
     },
   };
 }
+
+test("formatPiStatus shows the physical model, effective thinking level, decision, and confidence", () => {
+  const status = formatPiStatus({
+    provider: "openai-codex",
+    modelId: "gpt-6-luna",
+    thinkingLevel: "low",
+    tier: "fast",
+    decision: "JEV/no-change",
+    confidence: 0.74,
+    fromClassifier: true,
+    state: { tier: "fast", provider: "openai-codex", modelId: "gpt-6-luna", effectiveEffort: "low", version: 1 },
+  });
+  expect(status).toBe("[Jev] fast · openai-codex/gpt-6-luna · low · JEV/no-change · 0.74");
+  expect(formatPiStatus({
+    provider: "openai-codex", modelId: "gpt-6-luna", thinkingLevel: "low", tier: "fast",
+    fromClassifier: false,
+    state: { tier: "fast", provider: "openai-codex", modelId: "gpt-6-luna", effectiveEffort: "low", version: 1 },
+  })).toBeUndefined();
+});
 
 const DEFAULT_MODELS: PiModelInfo[] = [
   { provider: "openai-codex", modelId: "gpt-6-luna", displayName: "Luna", contextWindow: 200_000, thinkingLevels: ["off", "low", "medium"], authenticated: true },
@@ -252,6 +272,16 @@ describe("createPiAdapter — user reason", () => {
     const adapter = makeAdapter({ tier: "fast", effort: "medium", confidence: 0.9 });
     const result = await adapter.resolveModel({ reason: "user", text: "use strong then debug" });
     expect(result.tier).toBe("strong");
+  });
+  test("leading override is honored when JEV is unavailable", async () => {
+    const adapter = createPiAdapter({
+      config: defaultConfig(), registry: fakeRegistry(DEFAULT_MODELS), clamp: fakeClamp(),
+      route: async () => ({ request: {} as any, response: null, error: "service down", ms: 0 }),
+    });
+    const result = await adapter.resolveModel({ reason: "user", text: "use strong say hi" });
+    expect(result.tier).toBe("strong");
+    expect(result.decision).toBe("override");
+    expect(result.fromClassifier).toBe(false);
   });
 
   test("shared-model tiers (balanced+strong) produce distinct tiers with same model", async () => {
@@ -707,7 +737,7 @@ describe("activate", () => {
       },
       modelRegistry: fakeRegistry(DEFAULT_MODELS),
     };
-    const adapter = activate(mockPi, fakeClamp(DEFAULT_LEVELS), { route: fakeRoute() });
+    const adapter = activate(mockPi, fakeClamp(DEFAULT_LEVELS), { config: defaultConfig(), route: fakeRoute() });
     expect(resolverFn).toBeDefined();
     const result = await resolverFn!({ reason: "user", text: "test" });
     expect(result.provider).toBe("openai-codex");
@@ -778,7 +808,7 @@ describe("activate", () => {
       }),
       modelRegistry: fakeRegistry(DEFAULT_MODELS),
     };
-    activate(mockPi, fakeClamp(DEFAULT_LEVELS), { route: fakeRoute(), onResult: r => results.push(r) });
+    activate(mockPi, fakeClamp(DEFAULT_LEVELS), { config: defaultConfig(), route: fakeRoute(), onResult: r => results.push(r) });
     await resolverFn!({ reason: "user", text: "test" });
     expect(results).toHaveLength(1);
     expect(results[0].fromClassifier).toBe(true);

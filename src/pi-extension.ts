@@ -1,8 +1,15 @@
-import { configFromEnv, type Config } from "./config";
+import { configFromEnv, loadEnv, type Config } from "./config";
 import { createRouter, buildRequest, type CallerOptions, type Route, type RoutingResult } from "./router";
 import { decide, decisionLabel, checkEligibility } from "./policy";
 import { TIERS, type Candidate, type Tier, type ContextEvidence } from "./types";
 import { formatFeedback, type FeedbackValues } from "./feedback";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
+import { piQueryLogs } from "./pi-logs";
+import { randomUUID } from "node:crypto";
 
 const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type PiThinkingLevel = typeof PI_THINKING_LEVELS[number];
@@ -35,6 +42,13 @@ export type AdapterResult = {
   state: AdapterState;
 };
 
+export function formatPiStatus(result: AdapterResult): string | undefined {
+  if (!result.decision && !result.fromClassifier) return undefined;
+  const confidence = result.confidence === null || result.confidence === undefined
+    ? "unavailable" : result.confidence.toFixed(2);
+  return `[Jev] ${result.tier} · ${result.provider}/${result.modelId} · ${result.thinkingLevel} · ${result.decision ?? "JEV"} · ${confidence}`;
+}
+
 export type PiRequest = {
   reason: "user" | "continuation" | "retry" | "direct";
   text?: string;
@@ -42,6 +56,7 @@ export type PiRequest = {
   failed?: { provider: string; modelId: string; thinkingLevel?: string };
   priorContext?: { userExcerpt?: string; assistantExcerpt?: string };
   contextTokens?: number;
+  lastResponseTimestamp?: number;
   signal?: AbortSignal;
   state?: AdapterState;
 };
@@ -211,6 +226,7 @@ export function reconcileState(
 export type PiHistoryHandle = {
   path: string;
   append(record: unknown): void;
+  update?(id: string, update: (record: Record<string, any>) => Record<string, any>): void;
 };
 
 export type PiNotify = (message: string) => void;
@@ -222,6 +238,7 @@ type PiDecisionLogMeta = {
   capacityStatus?: string;
   capacityReason?: string;
   jevUsage?: { input_tokens?: number; output_tokens?: number };
+  jevResult?: RoutingResult;
   jevMs?: number;
   jevResponse?: unknown;
   jevError?: string;
@@ -389,6 +406,14 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       currentModel: currentQualifiedModel,
       currentEffort: state.effectiveEffort,
       contextTokens,
+      activity: {
+        last_response_at: Number.isFinite(request.lastResponseTimestamp)
+          && request.lastResponseTimestamp! > 0 && request.lastResponseTimestamp! <= Date.now()
+          ? new Date(request.lastResponseTimestamp!).toISOString() : null,
+        last_response_seconds_ago: Number.isFinite(request.lastResponseTimestamp)
+          && request.lastResponseTimestamp! > 0 && request.lastResponseTimestamp! <= Date.now()
+          ? Math.floor((Date.now() - request.lastResponseTimestamp!) / 1000) : null,
+      },
       candidates: eligibleCandidates,
       recentContext,
       agent: "pi" as const,
@@ -413,12 +438,12 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false);
     }
 
-    if (!result.response) {
+    if (!result.response && !decide(prompt, undefined, undefined, state.tier, eligibleCandidates, config.minConfidence).reason.startsWith("override")) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, "JEV/unavailable", null,
-        { ...baseMeta, jevResponse: null, jevError: result.error, jevMs: result.ms });
+        { ...baseMeta, jevResult: result, jevResponse: null, jevError: result.error, jevMs: result.ms });
     }
 
-    const modelAnswer = result.response.answers?.model;
+    const modelAnswer = result.response?.answers?.model;
     const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence)
       && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1
       ? modelAnswer.confidence : null;
@@ -435,7 +460,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     const selected = eligibleCandidates.find(c => c.tier === decision.tier) ?? eligibleCandidates[0];
     const { provider: selProvider, modelId: selModelId } = splitPiModelId(selected.id);
 
-    const effortAnswer = result.response.answers?.reasoning_effort;
+    const effortAnswer = result.response?.answers?.reasoning_effort;
     const desiredEffort = effortAnswer?.type === "choice"
       && Number.isFinite(effortAnswer.confidence)
       && effortAnswer.confidence >= config.minConfidence
@@ -459,10 +484,10 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       version: state.version + 1,
     };
 
-    const jevUsage = result.response.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-    const jevAnswers = result.response.answers;
-    return buildResult(selProvider, selModelId, effort, selected.tier, true, decisionLabel(decision.reason), confidence,
-      { ...baseMeta, requestedEffort: desiredEffort, jevUsage, jevMs: result.ms, jevAnswers });
+    const jevUsage = result.response?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+    const jevAnswers = result.response?.answers;
+    return buildResult(selProvider, selModelId, effort, selected.tier, !!result.response, decisionLabel(decision.reason), confidence,
+      { ...baseMeta, jevResult: result, requestedEffort: desiredEffort, jevUsage, jevMs: result.ms, jevAnswers });
   }
 
   function buildResult(
@@ -488,7 +513,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     onResult?.(result);
 
     if (history && meta?.reason === "user") {
-      const decisionId = `pi-${sessionId ?? "unknown"}-${++decisionCounter}`;
+      const decisionId = `pi-${sessionId ?? "unknown"}-${++decisionCounter}-${randomUUID()}`;
       lastDecisionId = decisionId;
       const record: Record<string, unknown> = {
         id: decisionId,
@@ -513,7 +538,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
             effort: meta.previousEffort,
           },
         } : {}),
-        ...(meta.jevUsage || meta.jevAnswers ? { jev: { response: { ...(meta.jevAnswers ? { answers: meta.jevAnswers } : {}), ...(meta.jevUsage ? { usage: meta.jevUsage } : {}) }, ms: meta.jevMs } } : meta.jevResponse === null ? { jev: { response: null, error: meta.jevError ?? decision, ms: meta.jevMs } } : {}),
+        ...(meta.jevResult ? { jev: meta.jevResult } : {}),
         ...(meta.capacityStatus ? { capacity_status: meta.capacityStatus } : {}),
         ...(meta.capacityReason ? { capacity_reason: meta.capacityReason } : {}),
         ...(meta.cache ? { cache: meta.cache } : {}),
@@ -553,6 +578,28 @@ export function createPiAdapter(options: CreateAdapterOptions) {
   }): void {
     if (!history) return;
     const effectiveDecisionId = obs.decisionId ?? lastDecisionId;
+    if (history.update && effectiveDecisionId) {
+      history.update(effectiveDecisionId, record => {
+        const usage = { ...(record.cache?.agent_usage ?? {}) };
+        for (const [key, value] of Object.entries({
+          input_tokens: obs.inputTokens, output_tokens: obs.outputTokens,
+          cache_read_tokens: obs.cacheReadTokens, cache_write_tokens: obs.cacheWriteTokens,
+        })) {
+          if (value !== undefined) usage[key] = (usage[key] ?? 0) + value;
+        }
+        return {
+          ...record,
+          cache: { ...record.cache, agent_usage: usage },
+          response: {
+            ...record.response,
+            last_observed_at: new Date().toISOString(),
+            provider_model: obs.providerModel,
+            observed_responses: (record.response?.observed_responses ?? 0) + 1,
+          },
+        };
+      });
+      return;
+    }
     const record = {
       type: "response-observation" as const,
       at: new Date().toISOString(),
@@ -616,4 +663,172 @@ export function activate(pi: {
 
   registration.onResolve(request => adapter.resolveModel(request));
   return adapter;
+}
+
+function messageText(message: { content?: unknown }): string {
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((block): block is { type: string; text: string } =>
+      !!block && typeof block === "object" && "text" in block && typeof block.text === "string",
+    )
+    .map(block => block.text)
+    .join("\n");
+}
+
+/** Pi's extension loader invokes the module's default export with its ExtensionAPI. */
+export default async function registerJevExtension(pi: ExtensionAPI): Promise<void> {
+  await loadEnv();
+  const config = configFromEnv();
+  pi.on("before_agent_start", (event, ctx) => {
+    if (ctx.model?.provider !== "jev" || ctx.model.id !== "auto") return;
+    return {
+      systemPrompt: `${event.systemPrompt}\n\nJEV model routing handles leading model-selection prefixes such as "use luna", "use sol", "use astra", "use fast", "use balanced", "use strong", and "use long" (also "switch to" or "with", optionally preceded by "please"). These prefixes are routing instructions, not commands or skills. Perform the remaining user request; do not search for or execute the model name as a command or skill. Routing feedback reports whether the requested model is available.`,
+    };
+  });
+  cleanupStaleLogs(DEFAULT_LOG_DIR, config.logRetentionDays ?? 0, "pi");
+  let activeAdapter: ReturnType<typeof createPiAdapter> | undefined;
+  let activeSession: string | undefined;
+  pi.registerTool({
+    name: "jev_logs",
+    label: "JEV logs",
+    description: "Query routing decisions and token usage for the active Pi session only.",
+    parameters: Type.Object({
+      last: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      detail: Type.Optional(Type.Boolean()),
+      filter_tier: Type.Optional(Type.String()),
+      filter_model: Type.Optional(Type.String()),
+      filter_decision: Type.Optional(Type.String()),
+      filter_keyword: Type.Optional(Type.String()),
+      filter_date: Type.Optional(Type.String()),
+    }),
+    async execute(_id, args, _signal, _update, ctx) {
+      const history = sessionHistory(ctx.sessionManager.getSessionId(), DEFAULT_LOG_DIR, "pi");
+      const text = piQueryLogs(history.path, {
+        last: args.last, detail: args.detail,
+        filterTier: args.filter_tier, filterModel: args.filter_model,
+        filterDecision: args.filter_decision, filterKeyword: args.filter_keyword,
+        filterDate: args.filter_date,
+      });
+      return { content: [{ type: "text", text }], details: {} };
+    },
+  });
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "assistant" || activeSession !== ctx.sessionManager.getSessionId()) return;
+    const message = event.message;
+    activeAdapter?.recordObservation({
+      providerModel: `${message.provider}/${message.model}`,
+      inputTokens: message.usage.input, outputTokens: message.usage.output,
+      cacheReadTokens: message.usage.cacheRead, cacheWriteTokens: message.usage.cacheWrite,
+    });
+  });
+  pi.registerEntryRenderer<{ message: string }>("coding-router-jev", (entry, _options, theme) =>
+    new Text(theme.fg("dim", entry.data?.message ?? ""), 1, 0),
+  );
+  pi.on("session_start", (_event, ctx) => {
+    activeAdapter = undefined;
+    activeSession = ctx.sessionManager.getSessionId();
+    if (ctx.hasUI) ctx.ui.setStatus("coding-router-jev", undefined);
+  });
+
+  pi.registerVirtualModel<AdapterState>({
+    provider: "jev",
+    id: "auto",
+    name: "Auto (Jev)",
+    thinkingLevels: PI_THINKING_LEVELS,
+    async route(request: ModelRouteRequest<AdapterState>, ctx: ExtensionContext) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const history = sessionHistory(sessionId, DEFAULT_LOG_DIR, "pi");
+      const available = new Set(ctx.modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`));
+      const registry: PiModelRegistry = {
+        find(provider, modelId) {
+          const qualified = `${provider}/${modelId}`;
+          if (!available.has(qualified)) return undefined;
+          const model = ctx.modelRegistry.find(provider, modelId);
+          if (!model) return undefined;
+          return {
+            provider: model.provider,
+            modelId: model.id,
+            displayName: model.name,
+            contextWindow: model.contextWindow,
+            thinkingLevels: getSupportedThinkingLevels(model),
+            authenticated: true,
+          };
+        },
+        list() {
+          return ctx.modelRegistry.getAvailable().map(model => ({
+            provider: model.provider,
+            modelId: model.id,
+            displayName: model.name,
+            contextWindow: model.contextWindow,
+            thinkingLevels: getSupportedThinkingLevels(model),
+            authenticated: true,
+          }));
+        },
+      };
+      const clamp: PiClamp = {
+        getSupportedThinkingLevels(ref) {
+          const model = ctx.modelRegistry.find(ref.provider, ref.modelId);
+          return model ? getSupportedThinkingLevels(model) : ["off"];
+        },
+        clampThinkingLevel(ref, level) {
+          const model = ctx.modelRegistry.find(ref.provider, ref.modelId);
+          return model ? clampThinkingLevel(model, level) : "off";
+        },
+      };
+      const adapter = createPiAdapter({
+        config,
+        registry,
+        clamp,
+        history,
+        sessionId,
+        feedbackFormat: config.feedbackFormat,
+        onResult(result) {
+          const status = formatPiStatus(result);
+          if (!status || !ctx.hasUI) return;
+          try { ctx.ui.setStatus("coding-router-jev", status); } catch { /* UI may close while routing. */ }
+        },
+        onNotify(message) {
+          if (!ctx.hasUI) return;
+          pi.appendEntry("coding-router-jev", { message });
+        },
+      });
+      if (request.reason === "user") activeAdapter = adapter;
+      activeSession = sessionId;
+      const users = request.messages.filter(message => message.role === "user");
+      const latestUser = users.at(-1);
+      const priorUser = users.at(-2);
+      const previousAssistant = request.messages.slice(0, latestUser ? request.messages.indexOf(latestUser) : 0)
+        .findLast(message => message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted");
+      const previous = request.previous && {
+        provider: request.previous.model.provider,
+        modelId: request.previous.model.id,
+        thinkingLevel: request.previous.thinkingLevel,
+      };
+      const failed = request.failed && {
+        provider: request.failed.model.provider,
+        modelId: request.failed.model.id,
+        thinkingLevel: request.failed.thinkingLevel,
+      };
+      const result = await adapter.resolveModel({
+        reason: request.reason,
+        contextTokens: Math.max(1, Math.round(JSON.stringify(request.messages).length / 4)),
+        lastResponseTimestamp: previousAssistant?.timestamp,
+        text: latestUser ? messageText(latestUser) : undefined,
+        previous,
+        failed,
+        priorContext: {
+          userExcerpt: priorUser ? messageText(priorUser).slice(0, 1000) : undefined,
+          assistantExcerpt: previousAssistant ? messageText(previousAssistant).slice(0, 1000) : undefined,
+        },
+        signal: request.signal,
+        state: request.state,
+      });
+      const model = ctx.modelRegistry.find(result.provider, result.modelId) as Model<Api> | undefined;
+      if (!model || !available.has(`${result.provider}/${result.modelId}`)) {
+        throw new Error(`JEV selected unavailable Pi model ${result.provider}/${result.modelId}. Check provider login and model configuration.`);
+      }
+      return { model, thinkingLevel: result.thinkingLevel, state: result.state };
+    },
+  });
 }

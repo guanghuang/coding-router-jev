@@ -17,19 +17,35 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-coding-agent": "1.0.2",
+    "@earendil-works/pi-tui": "1.0.2",
     "@types/bun": "^1.4.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typebox": "^1.3.34"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
   },
   "peerDependencies": {
+    "typebox": "*",
+    "@earendil-works/pi-tui": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": { "optional": true },
-    "@earendil-works/pi-ai": { "optional": true }
+    "typebox": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
   },
   "pi": {
     "extensions": ["./src/pi-extension.ts"],

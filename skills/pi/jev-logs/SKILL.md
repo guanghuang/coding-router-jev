@@ -1,4 +1,3 @@
-<!-- managed by coding-router-jev -->
 ---
 name: jev-logs
 description: >-
@@ -6,6 +5,7 @@ description: >-
   model/tier selections, effective effort levels, classifier usage,
   and cache observations for the current Pi session.
 ---
+<!-- managed by coding-router-jev -->
 
 # jev-logs (Pi)
 

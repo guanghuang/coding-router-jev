@@ -1,4 +1,3 @@
-<!-- managed by coding-router-jev -->
 ---
 name: jev-logs
 description: >-
@@ -6,6 +5,7 @@ description: >-
   model/tier selections, effort levels, and cache observations for the
   current codex-jev session.
 ---
+<!-- managed by coding-router-jev -->
 
 # jev-logs
 
