@@ -309,10 +309,10 @@ describe("claudeCandidatesFor with capabilities", () => {
   test("default config candidates have capacity from known defaults", () => {
     const config = configFromEnv({});
     const candidates = claudeCandidatesFor(config);
-    // Default is claude-sonnet-4-20250514 for all tiers
     for (const c of candidates) {
-      expect(c.capacity?.contextWindow).toBe(200_000);
-      expect(c.efforts).toContain("medium");
+      expect(c.capacity?.contextWindow).toBe(c.tier === "fast" ? 200_000 : 1_000_000);
+      if (c.tier === "fast") expect(c.efforts).toEqual([]);
+      else expect(c.efforts).toContain("medium");
     }
   });
 

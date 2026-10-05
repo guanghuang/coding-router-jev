@@ -8,8 +8,31 @@ import {
   writeStatusFile,
   updateStatusLine,
   removeStatusFile,
+  createClaudeStatusDisplay,
 } from "../src/claude-status";
 import type { FeedbackValues } from "../src/feedback";
+
+test("native status command reads updated model/effort and preserves user settings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "claude-native-status-test-"));
+  let display: ReturnType<typeof createClaudeStatusDisplay>;
+  try {
+    display = createClaudeStatusDisplay("test-model", "low", [], { CLAUDE_CONFIG_DIR: dir });
+    expect(display).toBeDefined();
+    const settings = JSON.parse(readFileSync(display!.settingsPath, "utf-8"));
+    expect(settings.statusLine.type).toBe("command");
+    const render = () => Bun.spawnSync(["sh", "-c", settings.statusLine.command]).stdout.toString().trim();
+    expect(render()).toBe("[Jev] test-model · low");
+    display!.update("next-model", "high");
+    expect(render()).toBe("[Jev] next-model · high");
+    expect(render()).not.toContain("confidence");
+    expect(createClaudeStatusDisplay("test", undefined, ["--settings", "custom.json"], { CLAUDE_CONFIG_DIR: dir })).toBeUndefined();
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ statusLine: { type: "command", command: "echo user" } }));
+    expect(createClaudeStatusDisplay("test", undefined, [], { CLAUDE_CONFIG_DIR: dir })).toBeUndefined();
+  } finally {
+    display?.cleanup();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 function makeFeedbackValues(overrides: Partial<FeedbackValues> = {}): FeedbackValues {
   return {
@@ -30,15 +53,13 @@ function makeFeedbackValues(overrides: Partial<FeedbackValues> = {}): FeedbackVa
 describe("buildStatusLine", () => {
   test("uses default format from feedback module", () => {
     const line = buildStatusLine(makeFeedbackValues());
-    expect(line).toContain("balanced");
-    expect(line).toContain("claude-sonnet-4-20250514");
-    expect(line).toContain("medium");
+    expect(line).toBe("[Jev] claude-sonnet-4-20250514 · medium");
     expect(line).toContain("[Jev]");
   });
 
   test("uses custom format", () => {
-    const line = buildStatusLine(makeFeedbackValues(), "{model} ({tier})");
-    expect(line).toBe("claude-sonnet-4-20250514 (balanced)");
+    const line = buildStatusLine(makeFeedbackValues(), "{model} · {effort}");
+    expect(line).toBe("claude-sonnet-4-20250514 · medium");
   });
 
   test("handles missing effort", () => {

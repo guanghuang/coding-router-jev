@@ -17,6 +17,9 @@ export type Config = {
   minConfidence: number;
   sendRecentContext: boolean;
   feedbackFormat: string | undefined;
+  statusFormat: string | undefined;
+  showStatus: boolean;
+  showFeedback: boolean;
   logRetentionDays: number | undefined;
   claudeContextWindow: number | undefined;
 };
@@ -59,16 +62,19 @@ export function configFromEnv(environment: Record<string, string | undefined> = 
       long: value("CODING_ROUTER_LONG_MODEL_PI", "openai-codex/gpt-6-astra"),
     },
     claudeModels: {
-      fast: value("CODING_ROUTER_FAST_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
-      balanced: value("CODING_ROUTER_BALANCED_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
-      strong: value("CODING_ROUTER_STRONG_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
-      long: value("CODING_ROUTER_LONG_MODEL_CLAUDE", "claude-sonnet-4-20250514"),
+      fast: value("CODING_ROUTER_FAST_MODEL_CLAUDE", "claude-haiku-4-5-20251001"),
+      balanced: value("CODING_ROUTER_BALANCED_MODEL_CLAUDE", "claude-sonnet-5-5"),
+      strong: value("CODING_ROUTER_STRONG_MODEL_CLAUDE", "claude-opus-5-5"),
+      long: value("CODING_ROUTER_LONG_MODEL_CLAUDE", "claude-fable-5-1"),
     },
     startTier: parseStartTier(value("CODING_ROUTER_START_TIER", ""), longModelEnabled),
     longModelEnabled,
     minConfidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.30,
     sendRecentContext: value("CODING_ROUTER_SEND_RECENT_CONTEXT", "true") === "true",
     feedbackFormat: value("CODING_ROUTER_FEEDBACK_FORMAT", "") || undefined,
+    statusFormat: value("CODING_ROUTER_STATUS_FORMAT", "") || undefined,
+    showStatus: value("CODING_ROUTER_STATUS_SHOW", "false") === "true",
+    showFeedback: value("CODING_ROUTER_FEEDBACK_SHOW", "true") !== "false",
     logRetentionDays: parseRetentionDays(value("CODING_ROUTER_LOG_RETENTION_DAYS", "")),
     claudeContextWindow: parseClaudeContextWindow(value("CODING_ROUTER_CONTEXT_WINDOW_CLAUDE", "")),
   };

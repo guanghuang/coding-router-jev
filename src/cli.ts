@@ -13,7 +13,8 @@ try {
   let childArgs = args;
   let logPath: string | undefined;
   if (process.env.TYPESAFE_API_KEY?.trim()) {
-    proxy = startProxy(configFromEnv());
+    const config = configFromEnv();
+    proxy = startProxy(config);
     childArgs = codexArgs(`http://127.0.0.1:${proxy.port}`, args);
     logPath = proxy.logPath;
   } else {

@@ -3,10 +3,45 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { configFromEnv } from "../src/config";
-import { CLAUDE_SENTINEL, startClaudeProxy, claudeArgs, claudeCandidatesFor } from "../src/claude-proxy";
+import { CLAUDE_SENTINEL, startClaudeProxy, claudeArgs, claudeCandidatesFor, injectClaudeNotice } from "../src/claude-proxy";
 import { buildRequest, type Route, type RoutingInput } from "../src/router";
 import { textOfMessage, textOfBlock, isToolResult } from "../src/claude-types";
 import type { ClaudeBody, ClaudeMessage } from "../src/claude-types";
+
+test("captures the original ANTHROPIC_BASE_URL before the child uses the local proxy", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "jev-claude-upstream-test-"));
+  const original = process.env.ANTHROPIC_BASE_URL;
+  const paths: string[] = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    paths.push(new URL(request.url).pathname);
+    expect(request.headers.get("x-api-key")).toBe("test-custom-key");
+    if (request.method === "POST") {
+      const body = await request.json() as { model: string };
+      expect(body.model).toBe("custom-model");
+    }
+    return Response.json({ model: "custom-model", content: [], usage: { input_tokens: 1, output_tokens: 0 } });
+  } });
+  let proxy: ReturnType<typeof startClaudeProxy> | undefined;
+  try {
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${upstream.port}/gateway/`;
+    proxy = startClaudeProxy(configFromEnv({}), { logDirectory: directory });
+    // Even changing the environment later must not replace the captured destination.
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxy.port}`;
+    const headers = { "x-api-key": "test-custom-key", "content-type": "application/json" };
+    expect((await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/models`, { headers })).status).toBe(200);
+    expect((await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
+      method: "POST", headers,
+      body: JSON.stringify({ model: "custom-model", messages: [{ role: "user", content: "hi" }], max_tokens: 10 }),
+    })).status).toBe(200);
+    expect(paths).toEqual(["/gateway/v1/models", "/gateway/v1/messages"]);
+  } finally {
+    if (original === undefined) delete process.env.ANTHROPIC_BASE_URL;
+    else process.env.ANTHROPIC_BASE_URL = original;
+    proxy?.close();
+    upstream.stop(true);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 function result(input: RoutingInput, tier: string) {
   return {
@@ -56,9 +91,12 @@ test("routes once per new user intent, keeps tool continuations, and logs JSONL"
   const proxy = startClaudeProxy(configFromEnv({}), { route, upstreamBaseURL: base, logDirectory: directory });
 
   try {
-    await (await send(proxy.port, [{ role: "user", content: "implement first" }])).text();
+    const annotated = "<system-reminder>Workspace instructions</system-reminder>\n<local-command-caveat>Local output</local-command-caveat>\n<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>\n<local-command-stdout>Model selected</local-command-stdout>\nimplement first";
+    await (await send(proxy.port, [{ role: "user", content: annotated }])).text();
     expect(inputs).toHaveLength(1);
     expect(inputs[0].agent).toBe("claude");
+    expect(inputs[0].prompt).toBe("implement first");
+    expect(captured[0].body.messages[0].content).toBe(annotated);
     expect(captured[0].body.model).toBe(configFromEnv({}).claudeModels.balanced);
     expect(captured[0].apiKey).toBe("fake-key");
 
@@ -145,10 +183,12 @@ test("separate sessions route independently", async () => {
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("streaming SSE format is preserved unchanged to client", async () => {
+test("streaming feedback is an assistant text block and provider block indices are shifted", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-stream-"));
+  const forwarded: ClaudeBody[] = [];
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     const body = await req.json() as ClaudeBody;
+    forwarded.push(body);
     return new Response(anthropicStream(body.model, "streamed text", 42), { headers: { "content-type": "text/event-stream" } });
   } });
   const proxy = startClaudeProxy(configFromEnv({}), {
@@ -163,7 +203,23 @@ test("streaming SSE format is preserved unchanged to client", async () => {
     expect(text).toContain("content_block_delta");
     expect(text).toContain("streamed text");
     expect(text).toContain("message_stop");
-    expect(text).not.toContain("[Jev]");
+    expect(text).toContain("[Jev]");
+    expect(text).toContain('"index":1');
+    const feedback = text.split("\n\n").map(frame => frame.split("\n").find(line => line.startsWith("data:")))
+      .filter(Boolean).map(line => JSON.parse(line!.slice(5)))
+      .find(event => event.delta?.text?.startsWith("[Jev]")).delta.text;
+    const continuation = await send(proxy.port, [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [{ type: "text", text: feedback }, { type: "text", text: "streamed text" }] },
+    ]);
+    expect(await continuation.text()).not.toContain("[Jev]");
+    expect(forwarded[1].messages[1].content).toEqual([{ type: "text", text: "streamed text" }]);
+    await (await send(proxy.port, [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: feedback + "streamed text" },
+      { role: "user", content: "next" },
+    ])).text();
+    expect(forwarded[2].messages[1].content).toBe("streamed text");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -184,7 +240,8 @@ test("non-streaming JSON response passes through and extracts usage", async () =
   try {
     const response = await send(proxy.port, [{ role: "user", content: "hello" }], CLAUDE_SENTINEL, false);
     const data = await response.json();
-    expect(data.content[0].text).toBe("response");
+    expect(data.content[0].text).toContain("[Jev]");
+    expect(data.content[1].text).toBe("response");
     expect(data.usage.cache_read_input_tokens).toBe(25);
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
@@ -337,7 +394,7 @@ test("claudeArgs builds correct arguments as string array", () => {
   expect(withModel).toContain("claude-opus-4-20250514");
 
   const withEnv = claudeArgs(["--print", "hi"], { ANTHROPIC_MODEL: "claude-opus-4-20250514" });
-  expect(withEnv.filter(a => a === CLAUDE_SENTINEL)).toHaveLength(0);
+  expect(withEnv).toEqual(["--model", CLAUDE_SENTINEL, "--print", "hi"]);
 });
 
 test("claudeCandidatesFor uses config claudeModels", () => {
@@ -422,9 +479,9 @@ test("Claude model overrides from environment", () => {
     CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-4-20250514",
   });
   expect(config.claudeModels.fast).toBe("claude-haiku-4-20250514");
-  expect(config.claudeModels.balanced).toBe("claude-sonnet-4-20250514");
+  expect(config.claudeModels.balanced).toBe("claude-sonnet-5-5");
   expect(config.claudeModels.strong).toBe("claude-opus-4-20250514");
-  expect(config.claudeModels.long).toBe("claude-sonnet-4-20250514");
+  expect(config.claudeModels.long).toBe("claude-fable-5-1");
 });
 
 test("Claude and Codex models are independent", () => {
@@ -721,4 +778,31 @@ test("same-turn continuation re-applies effort from state", async () => {
     // Effort should be re-applied from state.lastEffort
     expect((captured[1].output_config as Record<string, unknown>)?.effort).toBe("high");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test("feedback injection handles split SSE frames and preserves tool/thinking indices", async () => {
+  const events = [
+    { type: "message_start", message: { id: "msg_test" } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "tool_1", name: "test", input: {} } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_stop" },
+  ];
+  const encoded = new TextEncoder().encode(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""));
+  const source = new ReadableStream<Uint8Array>({ start(controller) {
+    for (let i = 0; i < encoded.length; i += 7) controller.enqueue(encoded.slice(i, i + 7));
+    controller.close();
+  } });
+  let emitted = 0;
+  const text = await new Response(injectClaudeNotice(source, "[Jev] test", () => emitted++)).text();
+  const parsed = text.trim().split("\n\n").map(frame => JSON.parse(frame.split("\n")[1].slice(6)));
+  expect(emitted).toBe(1);
+  expect(parsed[2].delta.text).toBe("[Jev] test\n\n");
+  expect(parsed[4].index).toBe(1);
+  expect(parsed[5].delta.signature).toBe("sig");
+  expect(parsed[7].index).toBe(2);
+  expect(parsed[7].content_block.id).toBe("tool_1");
 });

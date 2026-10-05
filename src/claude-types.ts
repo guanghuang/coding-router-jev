@@ -41,6 +41,15 @@ export function textOfMessage(message: ClaudeMessage): string {
   return message.content.map(textOfBlock).filter(Boolean).join("\n");
 }
 
+/** Remove leading Claude Code annotations from routing text, not the provider request. */
+export function routingTextOfMessage(message: ClaudeMessage): string {
+  let text = textOfMessage(message).trim();
+  if (message.role !== "user") return text;
+  const annotation = /^<(system-reminder|local-command-caveat|command-name|command-message|command-args|local-command-stdout)>[\s\S]*?<\/\1>\s*/;
+  while (annotation.test(text)) text = text.replace(annotation, "");
+  return text.trim();
+}
+
 export function isToolResult(message: ClaudeMessage): boolean {
   if (typeof message.content === "string") return false;
   return message.content.some(block => block.type === "tool_result");

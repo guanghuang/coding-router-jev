@@ -392,10 +392,11 @@ The `claude-jev` launcher does **not** authenticate with Anthropic on your behal
 
 ### How claude-jev works
 
-Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and starts ordinary Claude Code. With the key, it starts a local proxy on `127.0.0.1` at an OS-assigned port, sets `ANTHROPIC_BASE_URL` to route traffic through the proxy, and launches Claude Code with temporary provider settings. The proxy intercepts Messages API requests, classifies each new user turn through JEV, selects a model/tier/effort, and forwards the request to the Anthropic API.
+Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and starts ordinary Claude Code. With the key, it starts a local proxy on `127.0.0.1` at an OS-assigned port, captures the original `ANTHROPIC_BASE_URL` as its upstream (defaulting to `https://api.anthropic.com`), sets `ANTHROPIC_BASE_URL` only in the child process to route traffic through the proxy, and launches Claude Code with temporary provider settings. The proxy intercepts Messages API requests, classifies each new user turn through JEV, selects a model/tier/effort, and forwards the request to that captured upstream. Keep your existing custom server URL and credentials; no separate upstream URL setting is needed.
 
 Key behaviors:
-- **Statusline preservation**: `claude-jev` does not inject assistant notices into Claude's stream. Routing feedback is delivered through Claude's native `statusLine` display when configured.
+- **Default routing model**: With JEV enabled, the launcher selects its routing model even if `ANTHROPIC_MODEL` is set. Configure tier models with `CODING_ROUTER_*_MODEL_CLAUDE`. An explicit `--model` argument still bypasses routing. Without JEV enabled, the original Claude model configuration is preserved.
+- **Routing feedback and status line**: Each routed user intent adds a formatted `[Jev]` decision notice to the assistant response text using `CODING_ROUTER_FEEDBACK_FORMAT`, for streaming and JSON responses. Feedback is removed from forwarded history, and continuations/retries do not repeat it. Codex, Claude, and Pi use `CODING_ROUTER_STATUS_FORMAT` for status display (default `[Jev] {model} · {effort}`); status is off by default and enabled globally with `CODING_ROUTER_STATUS_SHOW=true`. Codex substitutes `Coding Router Jev` for `{model}` and adds its selected effort natively. For Codex, turning status off empties only the router model label and preserves the rest of its footer. Response notices can be hidden independently with `CODING_ROUTER_FEEDBACK_SHOW=false`. Codex adds feedback to the assistant response text. Claude status uses a temporary file and does not change global settings; existing user/project status lines and explicit `--settings` arguments are preserved. The Claude status line requires a shell with `cat` (Git Bash on Windows) and is not displayed in `--print` mode. Status formats use `{model}` and `{effort}`; feedback-only placeholders are separate.
 - **Session-local plugin**: The launcher generates a temporary Claude plugin directory with the `jev-logs` skill and passes it via `--plugin-dir`. The plugin is scoped to the current session and is not installed globally. Use `/claude-jev:jev-logs` to query routing decisions.
 - **Opt-out**: Set `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL=false` to disable the jev-logs plugin.
 - **No unsupported transports**: Bedrock and Vertex AI base URLs are rejected with an explicit error. Use the native Claude CLI directly for those providers.
@@ -404,13 +405,13 @@ Key behaviors:
 
 | Variable | Default |
 | --- | --- |
-| `CODING_ROUTER_FAST_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
-| `CODING_ROUTER_BALANCED_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
-| `CODING_ROUTER_STRONG_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
-| `CODING_ROUTER_LONG_MODEL_CLAUDE` | `claude-sonnet-4-20250514` |
+| `CODING_ROUTER_FAST_MODEL_CLAUDE` | `claude-haiku-4-5-20251001` |
+| `CODING_ROUTER_BALANCED_MODEL_CLAUDE` | `claude-sonnet-5-5` |
+| `CODING_ROUTER_STRONG_MODEL_CLAUDE` | `claude-opus-5-5` |
+| `CODING_ROUTER_LONG_MODEL_CLAUDE` | `claude-fable-5-1` |
 | `CODING_ROUTER_CONTEXT_WINDOW_CLAUDE` | Unset (uses model physical capacity) |
 
-`_MODEL_CLAUDE` variables accept exact Anthropic model IDs. The router looks up each model in its known-model table for context window, output budget, and thinking mode. Unknown model IDs are used as-is but without capacity enforcement or effort normalization.
+Defaults map Fast to Haiku 4.5, Balanced to Sonnet 5.5, Strong to Opus 5.5, and optional Long to Fable 5.1. IDs are listed in [Anthropic’s official SDK](https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/model.py). Model access depends on your account or custom server; Long remains disabled unless enabled. `_MODEL_CLAUDE` variables accept exact Anthropic model IDs. The router looks up each model in its known-model table for context window, output budget, and thinking mode. Unknown model IDs are used as-is but without capacity enforcement or effort normalization.
 
 Set `CODING_ROUTER_CONTEXT_WINDOW_CLAUDE` to a positive integer to override the virtual context window for all Claude candidates. The override cannot exceed a model's physical capacity — it is clamped to `min(override, physical)`.
 
@@ -437,7 +438,7 @@ Budgeted-thinking models (Haiku) do not support adaptive effort. The proxy strip
 
 ### Claude unsupported modes
 
-- **Bedrock / Vertex AI**: Setting `ANTHROPIC_UPSTREAM_URL` or `ANTHROPIC_BASE_URL` to an AWS Bedrock or Google Vertex endpoint causes `claude-jev` to exit with an error. Use the native Claude CLI for these transports.
+- **Bedrock / Vertex AI**: Setting `ANTHROPIC_BASE_URL` to an AWS Bedrock or Google Vertex endpoint causes `claude-jev` to exit with an error. Use the native Claude CLI for these transports.
 - **Cloud transport**: The proxy routes through the direct Anthropic Messages API only. Other transport modes are not supported.
 
 ### Reverting to ordinary Claude
@@ -534,7 +535,10 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 | `CODING_ROUTER_START_TIER` | `fast`; initial tier for new conversations and after restart. Allowed: `fast`, `balanced`, `strong`, `long`. Invalid or blank defaults to `fast`. `long` with Long disabled falls back to `fast`. The configured model alias for the chosen tier determines the actual startup model. |
 | `CODING_ROUTER_MIN_CONFIDENCE` | `0.30`; valid range `0`–`1`, invalid values fall back |
 | `CODING_ROUTER_SEND_RECENT_CONTEXT` | `true` |
-| `CODING_ROUTER_FEEDBACK_FORMAT` | See [Feedback format](#feedback-format) below; unset uses the built-in notice |
+| `CODING_ROUTER_FEEDBACK_FORMAT` | Response feedback format; unset uses the detailed built-in notice |
+| `CODING_ROUTER_STATUS_FORMAT` | Status format for Codex/Claude/Pi; unset uses `[Jev] {model} · {effort}` |
+| `CODING_ROUTER_STATUS_SHOW` | Show available status lines (Codex/Claude/Pi); default `false` |
+| `CODING_ROUTER_FEEDBACK_SHOW` | Show response feedback across agents; default `true` |
 | `CODING_ROUTER_LOG_RETENTION_DAYS` | Unset (no cleanup); positive number enables startup deletion of stale session logs older than this many days |
 | `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL` | `true`; set to `false` to skip automatic `jev-logs` skill installation |
 
@@ -588,7 +592,7 @@ Codex preserves its existing effort fallback and virtual-model context behavior.
 
 ## Feedback format
 
-The proxy inserts a `[Jev]` routing notice into eligible response streams (see [Routing notices](#routing-notices)). Set `CODING_ROUTER_FEEDBACK_FORMAT` to customize it. When the variable is unset, the default format is:
+Adapters show a detailed `[Jev]` routing notice in their response (see [Routing notices](#routing-notices)). Set `CODING_ROUTER_FEEDBACK_FORMAT` to customize it. When the variable is unset, the default format is:
 
 ```
 [Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.
@@ -615,7 +619,8 @@ Unknown placeholders are left as-is in the output. Token counts are never fabric
 **Example:**
 
 ```dotenv
-CODING_ROUTER_FEEDBACK_FORMAT=[Jev] {tier} · {model} · effort:{effort} · {decision} · confidence:{confidence}
+CODING_ROUTER_FEEDBACK_FORMAT=[Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.
+CODING_ROUTER_STATUS_FORMAT=[Jev] {model} · {effort}
 ```
 
 ## Routing

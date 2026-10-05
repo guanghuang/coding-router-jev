@@ -1,6 +1,8 @@
 export const DEFAULT_FEEDBACK_FORMAT =
   "[Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.";
 
+export const DEFAULT_STATUS_FORMAT = "[Jev] {model} · {effort}";
+
 export type FeedbackValues = {
   tier: string;
   model: string;
@@ -45,4 +47,12 @@ function renderValue(key: string, values: FeedbackValues): string {
 export function formatFeedback(format: string | undefined, values: FeedbackValues): string {
   const template = format ?? DEFAULT_FEEDBACK_FORMAT;
   return template.replace(PLACEHOLDER_RE, (_, key: string) => renderValue(key, values));
+}
+
+
+export function formatStatus(model: string, effort: string | undefined, format?: string): string {
+  return formatFeedback(format ?? DEFAULT_STATUS_FORMAT, {
+    tier: "", model, effort, decision: "", confidence: null, previous_model: "none",
+    cache_read: null, cache_write: null, jev_tokens_input: undefined, jev_tokens_output: undefined,
+  });
 }
