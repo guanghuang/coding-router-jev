@@ -20,16 +20,19 @@ describe("configuration", () => {
         long: "openai-codex/gpt-6-astra",
       },
       claudeModels: {
-        fast: "claude-sonnet-4-20250514",
-        balanced: "claude-sonnet-4-20250514",
-        strong: "claude-sonnet-4-20250514",
-        long: "claude-sonnet-4-20250514",
+        fast: "claude-haiku-4-5-20251001",
+        balanced: "claude-sonnet-5-5",
+        strong: "claude-opus-5-5",
+        long: "claude-fable-5-1",
       },
       startTier: "fast",
       longModelEnabled: false,
       minConfidence: 0.3,
       sendRecentContext: true,
       feedbackFormat: undefined,
+      statusFormat: undefined,
+      showStatus: false,
+      showFeedback: true,
       logRetentionDays: undefined,
       claudeContextWindow: undefined,
     });
@@ -61,6 +64,10 @@ describe("configuration", () => {
 
   test("parses feedback format and normalizes empty/whitespace to undefined", () => {
     expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "[Jev] {tier}" }).feedbackFormat).toBe("[Jev] {tier}");
+    expect(configFromEnv({ CODING_ROUTER_STATUS_FORMAT: "[Jev] {selected_model}" }).statusFormat).toBe("[Jev] {selected_model}");
+    expect(configFromEnv({}).showStatus).toBe(false);
+    expect(configFromEnv({}).showFeedback).toBe(true);
+    expect(configFromEnv({ CODING_ROUTER_STATUS_SHOW: "false", CODING_ROUTER_FEEDBACK_SHOW: "false" })).toMatchObject({ showStatus: false, showFeedback: false });
     expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "  " }).feedbackFormat).toBeUndefined();
     expect(configFromEnv({ CODING_ROUTER_FEEDBACK_FORMAT: "" }).feedbackFormat).toBeUndefined();
     expect(configFromEnv({}).feedbackFormat).toBeUndefined();

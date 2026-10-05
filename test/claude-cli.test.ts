@@ -27,9 +27,9 @@ test("launch args omit sentinel for -mmodel shorthand", () => {
   expect(built).toEqual(["-mclaude-opus-4-20250514"]);
 });
 
-test("launch args omit sentinel when ANTHROPIC_MODEL env is set", () => {
+test("launch args select routing model even when ANTHROPIC_MODEL env is set", () => {
   const built = claudeArgs(["--print", "hi"], { ANTHROPIC_MODEL: "claude-opus-4-20250514" });
-  expect(built).toEqual(["--print", "hi"]);
+  expect(built).toEqual(["--model", CLAUDE_SENTINEL, "--print", "hi"]);
 });
 
 test("launch args include sentinel when ANTHROPIC_MODEL is empty or whitespace", () => {

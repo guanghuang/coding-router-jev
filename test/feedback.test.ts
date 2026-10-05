@@ -15,7 +15,7 @@ const base: FeedbackValues = {
 };
 
 describe("formatFeedback", () => {
-  test("default format produces the legacy notice", () => {
+  test("default feedback format produces detailed notice", () => {
     expect(formatFeedback(undefined, base)).toBe(
       "[Jev] tier: balanced, model: gpt-6.1-sol, effort: low; decision: JEV, confidence: 0.90.",
     );
@@ -31,12 +31,12 @@ describe("formatFeedback", () => {
 
   test("missing effort renders as 'default'", () => {
     const values = { ...base, effort: undefined };
-    expect(formatFeedback(undefined, values)).toContain("effort: default");
+    expect(formatFeedback("{model} · {effort}", values)).toBe("gpt-6.1-sol · default");
   });
 
   test("null confidence renders as 'unavailable'", () => {
     const values = { ...base, confidence: null };
-    expect(formatFeedback(undefined, values)).toContain("confidence: unavailable");
+    expect(formatFeedback("{confidence}", values)).toBe("unavailable");
   });
 
   test("null cache values render as 'unavailable'", () => {
@@ -84,8 +84,13 @@ describe("formatFeedback", () => {
   });
 
   test("DEFAULT_FEEDBACK_FORMAT constant matches the legacy format", () => {
-    expect(DEFAULT_FEEDBACK_FORMAT).toBe(
-      "[Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.",
-    );
+    expect(DEFAULT_FEEDBACK_FORMAT).toBe("[Jev] tier: {tier}, model: {model}, effort: {effort}; decision: {decision}, confidence: {confidence}.");
   });
+});
+
+
+test("formatStatus uses its independent model/effort format", async () => {
+  const { formatStatus } = await import("../src/feedback");
+  expect(formatStatus("gpt-6-luna", "low")).toBe("[Jev] gpt-6-luna · low");
+  expect(formatStatus("gpt-6-luna", "low", "{model} . {effort}")).toBe("gpt-6-luna . low");
 });

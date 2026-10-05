@@ -4,7 +4,7 @@ import { isJevNotice, newTurn, recentContext, userAnchors } from "../src/context
 import { applyEffort, type EffortState } from "../src/effort";
 import { checkEligibility, decide, decisionLabel } from "../src/policy";
 import { buildRequest } from "../src/router";
-import { candidatesFor, codexArgs, AUTO_MODEL } from "../src/proxy";
+import { candidatesFor, codexArgs, codexStatusModelName, AUTO_MODEL } from "../src/proxy";
 import { observeStream, type Usage } from "../src/stream";
 import type { Candidate, CodexBody, Item } from "../src/types";
 
@@ -101,6 +101,9 @@ test("launcher selects a separate provider and isolates the Codex daemon", () =>
   expect(args).toContain(AUTO_MODEL);
   expect(args).toContain("--no-daemon");
   expect(codexArgs("http://127.0.0.1:1234", ["-m", "manual"]).filter(arg => arg === AUTO_MODEL)).toHaveLength(0);
+  expect(codexStatusModelName()).toBe("[Jev] Coding Router Jev ·");
+  expect(codexStatusModelName("[Jev] {model} / {effort}")).toBe("[Jev] Coding Router Jev /");
+  expect(codexStatusModelName(undefined, false)).toBe("");
 });
 
 

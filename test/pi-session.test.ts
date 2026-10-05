@@ -670,7 +670,7 @@ describe("history and feedback integration", () => {
     });
     await adapter.resolveModel({ reason: "user", text: "test notify" });
     expect(notifications).toHaveLength(1);
-    expect(notifications[0]).toContain("tier:");
+    expect(notifications[0]).toContain("tier: fast");
   });
 
   test("onNotify is not called for continuation/retry/direct", async () => {

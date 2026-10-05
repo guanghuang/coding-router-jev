@@ -47,7 +47,7 @@ function fakeClamp(levels?: Record<string, PiThinkingLevel[]>): PiClamp {
   };
 }
 
-test("formatPiStatus shows the physical model, effective thinking level, decision, and confidence", () => {
+test("formatPiStatus uses the separate status format", () => {
   const status = formatPiStatus({
     provider: "openai-codex",
     modelId: "gpt-6-luna",
@@ -58,7 +58,12 @@ test("formatPiStatus shows the physical model, effective thinking level, decisio
     fromClassifier: true,
     state: { tier: "fast", provider: "openai-codex", modelId: "gpt-6-luna", effectiveEffort: "low", version: 1 },
   });
-  expect(status).toBe("[Jev] fast · openai-codex/gpt-6-luna · low · JEV/no-change · 0.74");
+  expect(status).toBe("[Jev] gpt-6-luna · low");
+  expect(formatPiStatus({
+    provider: "openai-codex", modelId: "gpt-6-luna", thinkingLevel: "low", tier: "fast",
+    decision: "JEV/no-change", confidence: 0.74, fromClassifier: true,
+    state: { tier: "fast", provider: "openai-codex", modelId: "gpt-6-luna", effectiveEffort: "low", version: 1 },
+  }, "{model} . {effort}")).toBe("gpt-6-luna . low");
   expect(formatPiStatus({
     provider: "openai-codex", modelId: "gpt-6-luna", thinkingLevel: "low", tier: "fast",
     fromClassifier: false,

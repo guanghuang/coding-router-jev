@@ -1,13 +1,41 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, renameSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { formatFeedback, type FeedbackValues } from "./feedback";
+import { homedir, tmpdir } from "node:os";
+import { formatFeedback, formatStatus, type FeedbackValues } from "./feedback";
+
+/** Claude's status command rereads this file as the selection changes. */
+export function createClaudeStatusDisplay(model: string, effort: string | undefined, args: string[], env = process.env, format?: string) {
+  if (args.some(arg => arg === "--settings" || arg.startsWith("--settings="))) return undefined;
+  for (const path of [
+    join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
+    join(process.cwd(), ".claude", "settings.json"),
+    join(process.cwd(), ".claude", "settings.local.json"),
+  ]) {
+    try { if (JSON.parse(readFileSync(path, "utf-8")).statusLine) return undefined; } catch {}
+  }
+  const dir = mkdtempSync(join(tmpdir(), "jev-claude-status-"));
+  const textPath = join(dir, "status.txt");
+  const settingsPath = join(dir, "settings.json");
+  const command = `cat '${textPath.replace(/'/g, "'\\''")}'`;
+  writeFileSync(settingsPath, JSON.stringify({ statusLine: { type: "command", command, padding: 0 } }), { mode: 0o600 });
+  const update = (model: string, effort: string | undefined) => {
+    const temp = `${textPath}.tmp`;
+    const clean = (text: string) => text.replace(/[\x00-\x1f\x7f]/g, " ");
+    try {
+      writeFileSync(temp, `${formatStatus(clean(model), clean(effort ?? "default"), format)}\n`, { mode: 0o600 });
+      renameSync(temp, textPath);
+    } catch { console.error("[Jev] could not update Claude status line"); }
+  };
+  update(model, effort);
+  return { settingsPath, update, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
 
 /**
  * Build a concise status-line string for Claude's native statusLine display.
  * Uses the shared feedback template renderer.
  */
 export function buildStatusLine(values: FeedbackValues, format?: string): string {
-  return formatFeedback(format, values);
+  return formatStatus(values.model, values.effort, format);
 }
 
 /**

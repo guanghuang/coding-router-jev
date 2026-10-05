@@ -2,12 +2,15 @@
 
 import { dirname } from "node:path";
 import { configFromEnv, loadEnv } from "./config";
-import { claudeArgs, startClaudeProxy } from "./claude-proxy";
+import { claudeArgs, startClaudeProxy, CLAUDE_SENTINEL } from "./claude-proxy";
 import { generateClaudePlugin, resolveJevLogsPath, addPluginDirArg } from "./claude-skill";
+import { createClaudeStatusDisplay } from "./claude-status";
+import { lookupCapabilities } from "./claude-capabilities";
 
 const args = process.argv.slice(2);
 let proxy: ReturnType<typeof startClaudeProxy> | undefined;
 let pluginCleanup: (() => void) | undefined;
+let statusDisplay: ReturnType<typeof createClaudeStatusDisplay>;
 
 try {
   await loadEnv();
@@ -17,8 +20,14 @@ try {
 
   if (hasKey) {
     const config = configFromEnv();
-    proxy = startClaudeProxy(config);
+    const tier = config.longModelEnabled || config.startTier !== "long" ? config.startTier : "fast";
+    const initialModel = config.claudeModels[tier];
+    if (config.showStatus) statusDisplay = createClaudeStatusDisplay(initialModel, lookupCapabilities(initialModel)?.defaultEffort, args, process.env, config.statusFormat);
+    proxy = startClaudeProxy(config, {
+      onDecision: values => statusDisplay?.update(values.model, values.effort),
+    });
     childArgs = claudeArgs(args, process.env);
+    if (statusDisplay) childArgs.push("--settings", statusDisplay.settingsPath);
     logPath = proxy.logPath;
 
     // Generate session-local plugin for jev-logs skill
@@ -56,6 +65,9 @@ try {
     delete childEnv.TYPESAFE_DEFAULT_MODEL;
     if (hasKey && proxy) {
       childEnv.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxy.port}`;
+      childEnv.ANTHROPIC_CUSTOM_MODEL_OPTION = CLAUDE_SENTINEL;
+      childEnv.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME = "Coding Router Jev";
+      childEnv.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION = "JEV selects the model and reasoning effort for each user intent.";
     }
     if (logPath) childEnv.JEV_SESSION_LOG = logPath;
     else delete childEnv.JEV_SESSION_LOG;
@@ -76,4 +88,5 @@ try {
 } finally {
   pluginCleanup?.();
   proxy?.close();
+  statusDisplay?.cleanup();
 }

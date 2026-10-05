@@ -6,7 +6,7 @@ import { buildRequest, createRouter, type Route, type RoutingResult } from "./ro
 import { formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { TIERS, type Candidate, type RecentContext, type Tier } from "./types";
-import { textOfMessage, isToolResult, type ClaudeBody } from "./claude-types";
+import { textOfMessage, routingTextOfMessage, isToolResult, type ClaudeBody } from "./claude-types";
 import { lookupCapabilities, claudeEffortsFor, claudeCapacity, resolveClaudeThinking, CLAUDE_OVERRIDE_ALIASES } from "./claude-capabilities";
 
 export const CLAUDE_SENTINEL = "coding-router-jev";
@@ -42,7 +42,7 @@ function claudeConversationKey(body: ClaudeBody): string {
   const id = metadata?.session_id ?? metadata?.conversation_id;
   const firstUser = body.messages.find(m => m.role === "user");
   const systemText = typeof body.system === "string" ? body.system : Array.isArray(body.system) ? body.system.map(b => b.text).join("") : "";
-  return hash(String(id ?? `${systemText}|${firstUser ? textOfMessage(firstUser) : ""}`));
+  return hash(String(id ?? `${systemText}|${firstUser ? routingTextOfMessage(firstUser) : ""}`));
 }
 
 function claudeNewTurn(body: ClaudeBody): { prompt: string; anchor: string } | undefined {
@@ -53,11 +53,11 @@ function claudeNewTurn(body: ClaudeBody): { prompt: string; anchor: string } | u
     if (msg.role === "assistant") return;
     if (msg.role === "user") {
       if (isToolResult(msg)) return;
-      const text = textOfMessage(msg).trim();
+      const text = routingTextOfMessage(msg);
       if (!text) continue;
       const userTexts: string[] = [];
       for (let j = 0; j <= i; j++) {
-        if (messages[j].role === "user") userTexts.push(textOfMessage(messages[j]));
+        if (messages[j].role === "user") userTexts.push(routingTextOfMessage(messages[j]));
       }
       return { prompt: text, anchor: hash(JSON.stringify(userTexts)) };
     }
@@ -65,14 +65,14 @@ function claudeNewTurn(body: ClaudeBody): { prompt: string; anchor: string } | u
 }
 
 function claudeRecentContext(body: ClaudeBody): RecentContext | undefined {
-  const msgs = body.messages.filter(m => !isToolResult(m) && textOfMessage(m).trim());
+  const msgs = body.messages.filter(m => !isToolResult(m) && routingTextOfMessage(m));
   const currentIdx = msgs.findLastIndex(m => m.role === "user");
   if (currentIdx < 0) return;
   const prevIdx = msgs.slice(0, currentIdx).findLastIndex(m => m.role === "user");
   if (prevIdx < 0) return;
   const assistant = msgs.slice(prevIdx + 1, currentIdx).findLast(m => m.role === "assistant");
   return {
-    previous_user_request: textOfMessage(msgs[prevIdx]).slice(0, 1000),
+    previous_user_request: routingTextOfMessage(msgs[prevIdx]).slice(0, 1000),
     ...(assistant ? { previous_assistant_excerpt: textOfMessage(assistant).slice(0, 1000) } : {}),
   };
 }
@@ -108,19 +108,18 @@ export function claudeCandidatesFor(config: Config): Candidate[] {
 const BEDROCK_RE = /\.amazonaws\.com/i;
 const VERTEX_RE = /aiplatform\.googleapis\.com/i;
 
-export function claudeArgs(args: string[], env?: Record<string, string | undefined>): string[] {
+export function claudeArgs(args: string[], _env?: Record<string, string | undefined>): string[] {
   const hasModel = args.some(arg => ["--model", "-m"].includes(arg) || arg.startsWith("--model=") || /^-m.+/.test(arg));
-  const hasEnvModel = !!(env ?? process.env).ANTHROPIC_MODEL?.trim();
-  return [...(hasModel || hasEnvModel ? [] : ["--model", CLAUDE_SENTINEL]), ...args];
+  return [...(hasModel ? [] : ["--model", CLAUDE_SENTINEL]), ...args];
 }
 
-export function startClaudeProxy(config: Config, options: { route?: Route; upstreamBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void } = {}) {
+export function startClaudeProxy(config: Config, options: { route?: Route; upstreamBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void; onDecision?: (values: FeedbackValues) => void } = {}) {
   const route = options.route ?? createRouter();
   const logDir = options.logDirectory ?? DEFAULT_LOG_DIR;
   if (config.logRetentionDays !== undefined) cleanupStaleLogs(logDir, config.logRetentionDays, "claude");
   const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, logDir, "claude");
 
-  const upstreamBase = options.upstreamBaseURL ?? process.env.ANTHROPIC_UPSTREAM_URL ?? "https://api.anthropic.com";
+  const upstreamBase = options.upstreamBaseURL ?? (process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com");
 
   if (BEDROCK_RE.test(upstreamBase)) throw new Error("[Jev] Bedrock transport is not supported by claude-jev. Use the native Claude CLI with Bedrock directly, or set ANTHROPIC_BASE_URL to the Anthropic API.");
   if (VERTEX_RE.test(upstreamBase)) throw new Error("[Jev] Vertex AI transport is not supported by claude-jev. Use the native Claude CLI with Vertex directly, or set ANTHROPIC_BASE_URL to the Anthropic API.");
@@ -129,7 +128,22 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
   const locks = new Map<string, Promise<unknown>>();
   const cachedCandidates = claudeCandidatesFor(config);
 
+  const emittedNotices = new Set<string>();
+  const announced = new Set<string>();
+
   async function prepare(body: ClaudeBody, signal?: AbortSignal) {
+    // Strip only feedback actually emitted by this proxy, preserving provider text.
+    for (const message of body.messages) {
+      if (message.role !== "assistant") continue;
+      const strip = (text: string) => {
+        for (const notice of emittedNotices) if (text.startsWith(notice)) return text.slice(notice.length);
+        return text;
+      };
+      if (typeof message.content === "string") message.content = strip(message.content);
+      else message.content = message.content.map(block => block.type === "text" ? { ...block, text: strip(String(block.text)) } : block)
+        .filter(block => block.type !== "text" || block.text !== "");
+    }
+    body.messages = body.messages.filter(message => !Array.isArray(message.content) || message.content.length > 0);
     const key = claudeConversationKey(body);
     const previous = locks.get(key) ?? Promise.resolve();
     const job = previous.catch(() => {}).then(async () => {
@@ -230,8 +244,9 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           jev_tokens_input: typeof jevUsage?.input_tokens === "number" && Number.isFinite(jevUsage.input_tokens) ? jevUsage.input_tokens : undefined,
           jev_tokens_output: typeof jevUsage?.output_tokens === "number" && Number.isFinite(jevUsage.output_tokens) ? jevUsage.output_tokens : undefined,
         };
-        notice = formatFeedback(config.feedbackFormat, feedbackValues);
-        options.onNotice?.(notice);
+        notice = config.showFeedback ? formatFeedback(config.feedbackFormat, feedbackValues) : undefined;
+        options.onDecision?.(feedbackValues);
+        if (notice !== undefined) options.onNotice?.(notice);
         state.notice = notice;
         state.noticeKey = noticeKey;
 
@@ -322,14 +337,26 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         }
 
         const contentType = response.headers.get("content-type");
+        const notice = !options.onNotice && prepared.notice && prepared.noticeKey && !announced.has(prepared.noticeKey)
+          ? prepared.notice : undefined;
+        const markNotice = () => {
+          if (!notice) return;
+          announced.add(prepared.noticeKey!);
+          emittedNotices.add(`${notice}\n\n`);
+        };
         if (contentType?.includes("text/event-stream") && response.body) {
-          return new Response(observeClaudeStream(response.body, prepared.state, body.model), { status: response.status, headers: responseHeaders });
+          const source = notice ? injectClaudeNotice(response.body, notice, markNotice) : response.body;
+          return new Response(observeClaudeStream(source, prepared.state, body.model), { status: response.status, headers: responseHeaders });
         }
 
         if (contentType?.includes("application/json")) {
           const data = await response.arrayBuffer();
           try {
             const parsed = JSON.parse(new TextDecoder().decode(data));
+            if (notice && parsed.type === "message" && Array.isArray(parsed.content)) {
+              parsed.content.unshift({ type: "text", text: `${notice}\n\n` });
+              markNotice();
+            }
             if (parsed.usage) {
               const now = Date.now();
               const obs: ClaudeUsageObs = {
@@ -342,6 +369,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
               prepared.state.observations.push(obs);
               prepared.state.observations = prepared.state.observations.filter(o => now - o.at <= 3_600_000).slice(-200);
             }
+            return Response.json(parsed, { status: response.status, headers: responseHeaders });
           } catch {}
           return new Response(data, { status: response.status, headers: responseHeaders });
         }
@@ -399,6 +427,45 @@ function observeClaudeStream(source: ReadableStream<Uint8Array>, state: ClaudeSt
           }
         } catch {}
       }
+    },
+  }));
+}
+
+/** Add a text block after message_start; shift provider indices, including tool/thinking blocks. */
+export function injectClaudeNotice(source: ReadableStream<Uint8Array>, notice: string, onEmitted: () => void): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let pending = "";
+  let injected = false;
+  const frame = (event: Record<string, unknown>) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  return source.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      pending += decoder.decode(chunk, { stream: true });
+      const frames = pending.split(/\r?\n\r?\n/);
+      pending = frames.pop() ?? "";
+      for (const raw of frames) {
+        let output = `${raw}\n\n`;
+        try {
+          const event = JSON.parse(raw.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n"));
+          if (injected && typeof event.index === "number") {
+            event.index += 1;
+            output = frame(event);
+          }
+          if (!injected && event.type === "message_start") {
+            output += frame({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+            output += frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `${notice}\n\n` } });
+            output += frame({ type: "content_block_stop", index: 0 });
+            injected = true;
+            onEmitted();
+          }
+        } catch { /* Preserve non-JSON SSE frames. */ }
+        controller.enqueue(encoder.encode(output));
+      }
+      if (pending.length > 1024 * 1024) throw new Error("Claude SSE frame exceeds 1 MiB");
+    },
+    flush(controller) {
+      pending += decoder.decode();
+      if (pending) controller.enqueue(encoder.encode(pending));
     },
   }));
 }

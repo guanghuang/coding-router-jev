@@ -2,7 +2,7 @@ import { configFromEnv, loadEnv, type Config } from "./config";
 import { createRouter, buildRequest, type CallerOptions, type Route, type RoutingResult } from "./router";
 import { decide, decisionLabel, checkEligibility } from "./policy";
 import { TIERS, type Candidate, type Tier, type ContextEvidence } from "./types";
-import { formatFeedback, type FeedbackValues } from "./feedback";
+import { formatFeedback, formatStatus, type FeedbackValues } from "./feedback";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -42,11 +42,9 @@ export type AdapterResult = {
   state: AdapterState;
 };
 
-export function formatPiStatus(result: AdapterResult): string | undefined {
+export function formatPiStatus(result: AdapterResult, format?: string): string | undefined {
   if (!result.decision && !result.fromClassifier) return undefined;
-  const confidence = result.confidence === null || result.confidence === undefined
-    ? "unavailable" : result.confidence.toFixed(2);
-  return `[Jev] ${result.tier} · ${result.provider}/${result.modelId} · ${result.thinkingLevel} · ${result.decision ?? "JEV"} · ${confidence}`;
+  return formatStatus(result.modelId, result.thinkingLevel, format);
 }
 
 export type PiRequest = {
@@ -526,7 +524,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
         decision: {
           tier,
           reason: decision ?? "unknown",
-          model: `${provider}/${modelId}`,
+          model: modelId,
           effort: thinkingLevel,
         },
         ...(meta.requestedEffort !== undefined ? { requested_effort: meta.requestedEffort } : {}),
@@ -550,7 +548,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       try {
         const feedbackValues: FeedbackValues = {
           tier,
-          model: `${provider}/${modelId}`,
+          model: modelId,
           effort: thinkingLevel,
           decision: decision ?? "unknown",
           confidence: confidence ?? null,
@@ -784,12 +782,13 @@ export default async function registerJevExtension(pi: ExtensionAPI): Promise<vo
         sessionId,
         feedbackFormat: config.feedbackFormat,
         onResult(result) {
-          const status = formatPiStatus(result);
+          if (!config.showStatus) return;
+          const status = formatPiStatus(result, config.statusFormat);
           if (!status || !ctx.hasUI) return;
           try { ctx.ui.setStatus("coding-router-jev", status); } catch { /* UI may close while routing. */ }
         },
         onNotify(message) {
-          if (!ctx.hasUI) return;
+          if (!config.showFeedback || !ctx.hasUI) return;
           pi.appendEntry("coding-router-jev", { message });
         },
       });

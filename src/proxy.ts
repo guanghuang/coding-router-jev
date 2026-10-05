@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "./config";
 import { conversationKey, hash, isJevNotice, newTurn, recentContext } from "./context";
 import { applyEffort, type EffortState } from "./effort";
-import { formatFeedback, type FeedbackValues } from "./feedback";
+import { DEFAULT_STATUS_FORMAT, formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult } from "./router";
@@ -47,6 +47,14 @@ export function candidatesFor(config: Config, catalog: Map<string, CatalogModel>
     return { tier, id, description: [model?.display_name ?? id, model?.description, model?.context_window && `${model.context_window} context tokens`].filter(Boolean).join("; "), efforts, defaultEffort: model?.default_reasoning_level ?? (efforts.includes("medium") ? "medium" : efforts[0]), capacity };
   });
 }
+export function codexStatusModelName(format?: string, show = true): string {
+  if (!show) return "";
+  return (format ?? DEFAULT_STATUS_FORMAT)
+    .replaceAll("{model}", "Coding Router Jev")
+    .replace(/\s*\{effort\}\s*$/, "")
+    .trimEnd();
+}
+
 export const codexArgs = (baseURL: string, args: string[]) => [
   ...(args.some(arg => ["--model", "-m"].includes(arg) || arg.startsWith("--model=") || /^-m.+/.test(arg)) ? [] : ["--model", AUTO_MODEL]),
   "--config", 'model_provider="coding_router_jev"',
@@ -127,8 +135,8 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
           jev_tokens_input: typeof jevUsage?.input_tokens === "number" && Number.isFinite(jevUsage.input_tokens) ? jevUsage.input_tokens : undefined,
           jev_tokens_output: typeof jevUsage?.output_tokens === "number" && Number.isFinite(jevUsage.output_tokens) ? jevUsage.output_tokens : undefined,
         };
-        notice = formatFeedback(config.feedbackFormat, feedbackValues);
-        options.onNotice?.(notice);
+        notice = config.showFeedback ? formatFeedback(config.feedbackFormat, feedbackValues) : undefined;
+        if (notice !== undefined) options.onNotice?.(notice);
         state.notice = notice;
         state.noticeKey = noticeKey;
         history.append({ id, at: new Date().toISOString(), conversation: key, turn: turnKey, prompt: turn.prompt, jev: result, previous: { tier: currentTier, model: currentModel, effort: previousEffort ?? null }, decision: { ...decision, model: selected.id, effort: effort ?? null, effort_update_preserves_prefix: preserved }, cache });
@@ -169,7 +177,9 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
           const data = await response.json() as { models?: CatalogModel[] };
           if (Array.isArray(data.models)) {
             for (const model of data.models) catalog.set(model.slug, model);
-            if (!data.models.some(model => model.slug === AUTO_MODEL) && data.models[0]) data.models.unshift({ ...data.models[0], slug: AUTO_MODEL, display_name: "Coding Router Jev", description: "JEV selects the model tier and reasoning effort for each turn.", visibility: "list", supported_in_api: true, priority: 0, upgrade: null });
+            const autoModel = data.models.find(model => model.slug === AUTO_MODEL);
+            if (autoModel) autoModel.display_name = codexStatusModelName(config.statusFormat, config.showStatus);
+            else if (data.models[0]) data.models.unshift({ ...data.models[0], slug: AUTO_MODEL, display_name: codexStatusModelName(config.statusFormat, config.showStatus), description: "JEV selects the model tier and reasoning effort for each turn.", visibility: "list", supported_in_api: true, priority: 0, upgrade: null });
           }
           return Response.json(data, { status: response.status, headers: responseHeaders });
         }
