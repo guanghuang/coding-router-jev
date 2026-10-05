@@ -617,10 +617,14 @@ describe("history and feedback integration", () => {
     expect(rec.session).toBe("test-sess");
     expect(rec.branch).toBe("main");
     expect(rec.prompt).toBe("hello world");
-    expect(rec.id).toMatch(/^pi-test-sess-\d+$/);
+    expect(rec.id).toMatch(/^pi-test-sess-\d+-[\w-]+$/);
     expect(rec.provider_model).toBeDefined();
     expect(rec.decision).toBeDefined();
     expect(rec.effective_effort).toBeDefined();
+    const exchange = rec.jev as RoutingResult;
+    expect(Object.keys(exchange.request)).toEqual([]);
+    expect(exchange.response?.answers?.model).toBeDefined();
+    expect(exchange.ms).toBeDefined();
   });
 
   test("continuation does not append to history", async () => {

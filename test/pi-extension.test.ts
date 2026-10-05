@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { configFromEnv, type Config } from "../src/config";
 import {
   createPiAdapter,
+  formatPiStatus,
   piCandidatesFor,
   resolveEffort,
   estimateContextTokens,
@@ -45,6 +46,25 @@ function fakeClamp(levels?: Record<string, PiThinkingLevel[]>): PiClamp {
     },
   };
 }
+
+test("formatPiStatus shows the physical model, effective thinking level, decision, and confidence", () => {
+  const status = formatPiStatus({
+    provider: "openai-codex",
+    modelId: "gpt-6-luna",
+    thinkingLevel: "low",
+    tier: "fast",
+    decision: "JEV/no-change",
+    confidence: 0.74,
+    fromClassifier: true,
+    state: { tier: "fast", provider: "openai-codex", modelId: "gpt-6-luna", effectiveEffort: "low", version: 1 },
+  });
+  expect(status).toBe("[Jev] fast · openai-codex/gpt-6-luna · low · JEV/no-change · 0.74");
+  expect(formatPiStatus({
+    provider: "openai-codex", modelId: "gpt-6-luna", thinkingLevel: "low", tier: "fast",
+    fromClassifier: false,
+    state: { tier: "fast", provider: "openai-codex", modelId: "gpt-6-luna", effectiveEffort: "low", version: 1 },
+  })).toBeUndefined();
+});
 
 const DEFAULT_MODELS: PiModelInfo[] = [
   { provider: "openai-codex", modelId: "gpt-6-luna", displayName: "Luna", contextWindow: 200_000, thinkingLevels: ["off", "low", "medium"], authenticated: true },

@@ -62,14 +62,14 @@ export function generateSkillContent(jevLogsPath: string, sessionLogPath: string
   const quotedBin = shellQuote(jevLogsPath);
   const quotedLog = shellQuote(sessionLogPath);
 
-  return `<!-- managed by coding-router-jev -->
----
+  return `---
 name: ${SKILL_NAME}
 description: >-
   Query active Claude JEV routing session logs. Shows routing decisions,
   model/tier selections, effort levels, and cache observations for the
   current Claude session.
 ---
+<!-- managed by coding-router-jev -->
 
 # jev-logs
 

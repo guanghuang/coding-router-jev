@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { utimesSync, readFileSync } from "node:fs";
+import { utimesSync, readFileSync, existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile, mkdir, readdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,11 +197,25 @@ describe("cleanupStaleLogs", () => {
 });
 
 describe("sessionHistory", () => {
-  test("creates pi-prefixed log file", async () => {
+  test("startup cleanup recognizes unified logs for every agent", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-history-test-"));
+    try {
+      for (const agent of ["codex", "pi", "claude"] as const) {
+        await createFile(dir, "jev-old.jsonl", 10 * DAY_MS);
+        await createFile(dir, "jev-recent.jsonl", DAY_MS);
+        cleanupStaleLogs(dir, 5, agent);
+        expect(existsSync(join(dir, "jev-old.jsonl"))).toBe(false);
+        expect(existsSync(join(dir, "jev-recent.jsonl"))).toBe(true);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  test("creates unified log file for Pi", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jev-history-test-"));
     try {
       const hist = sessionHistory("test-session", dir, "pi");
-      expect(hist.path).toContain("pi-test-session.jsonl");
+      expect(hist.path).toContain("jev-test-session.jsonl");
       hist.append({ id: "test" });
       const content = readFileSync(hist.path, "utf-8");
       expect(content).toContain('"id":"test"');
@@ -210,11 +224,11 @@ describe("sessionHistory", () => {
     }
   });
 
-  test("creates codex-prefixed log by default", async () => {
+  test("creates unified log file by default", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jev-history-test-"));
     try {
       const hist = sessionHistory("test-session", dir);
-      expect(hist.path).toContain("codex-test-session.jsonl");
+      expect(hist.path).toContain("jev-test-session.jsonl");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -229,7 +243,7 @@ describe("sessionHistory", () => {
     try {
       const hist = sessionHistory("../../../etc/passwd", dir, "pi");
       expect(hist.path).not.toContain("..");
-      expect(hist.path).toContain("pi-etcpasswd.jsonl");
+      expect(hist.path).toContain("jev-etcpasswd.jsonl");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

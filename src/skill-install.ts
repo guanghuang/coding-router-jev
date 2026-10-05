@@ -63,7 +63,6 @@ export function installSkill(options: {
 }
 
 const EMBEDDED_SKILL = [
-  MANAGED_HEADER,
   "---",
   "name: jev-logs",
   "description: >-",
@@ -71,6 +70,7 @@ const EMBEDDED_SKILL = [
   "  model/tier selections, effort levels, and cache observations for the",
   "  current codex-jev session.",
   "---",
+  MANAGED_HEADER,
   "",
   "# jev-logs",
   "",

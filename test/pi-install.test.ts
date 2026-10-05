@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync, statSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { configFromEnv } from "../src/config";
+import { DEFAULT_LOG_DIR } from "../src/history";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(join(import.meta.dir, ".."));
@@ -47,14 +51,111 @@ describe("Pi package manifest", () => {
     expect(pkg.pi.skills).toContain("./skills/pi/jev-logs");
   });
 
-  test("pi-extension exports activate and createPiAdapter", async () => {
+  test("pi-extension exports Pi's default factory and testable adapter helpers", async () => {
     const mod = await import("../src/pi-extension");
+    expect(typeof mod.default).toBe("function");
     expect(typeof mod.activate).toBe("function");
     expect(typeof mod.createPiAdapter).toBe("function");
+  });
+
+  test("default factory registers a native Pi virtual-model route", async () => {
+    const mod = await import("../src/pi-extension");
+    let definition: Record<string, unknown> | undefined;
+    const handlers = new Map<string, Function>();
+    let renderer: Function | undefined;
+    let tool: { execute: Function } | undefined;
+    await mod.default({
+      registerVirtualModel(value: Record<string, unknown>) { definition = value; },
+      registerTool(value: { name: string; execute: Function }) {
+        expect(value.name).toBe("jev_logs");
+        tool = value;
+      },
+      registerEntryRenderer(type: string, value: Function) {
+        expect(type).toBe("coding-router-jev");
+        renderer = value;
+      },
+      on(event: string, handler: Function) { handlers.set(event, handler); return () => {}; },
+    } as never);
+    expect(definition?.provider).toBe("jev");
+    expect(definition?.id).toBe("auto");
+    expect(typeof definition?.route).toBe("function");
+    expect(typeof handlers.get("session_start")).toBe("function");
+    const beforeStart = handlers.get("before_agent_start")!;
+    expect(beforeStart({ systemPrompt: "Base" }, { model: { provider: "jev", id: "auto" } }).systemPrompt)
+      .toContain("not commands or skills");
+    expect(beforeStart({ systemPrompt: "Base" }, { model: { provider: "openai", id: "test" } })).toBeUndefined();
+    const message = "[Jev] tier: fast; decision: JEV/no-change, confidence: 0.74.";
+    const component = renderer!({ data: { message } }, {}, { fg: (_color: string, text: string) => text });
+    expect(component.render(120).join("\n")).toContain(message);
+    const sessionId = `test-${randomUUID()}`;
+    const path = join(DEFAULT_LOG_DIR, `jev-${sessionId}.jsonl`);
+    const modelName = configFromEnv().piModels.fast;
+    const slash = modelName.indexOf("/");
+    const model = {
+      provider: modelName.slice(0, slash), id: modelName.slice(slash + 1),
+      name: "Test model", api: "openai-responses", reasoning: false, contextWindow: 1000000,
+    };
+    const ctx = {
+      hasUI: false,
+      sessionManager: { getSessionId: () => sessionId },
+      modelRegistry: { getAvailable: () => [model], find: () => model },
+    };
+    try {
+      for (let i = 0; i < 2; i++) {
+        const result = await (definition!.route as Function)({ reason: "user", messages: [
+          { role: "system", content: "System instructions. ".repeat(100) },
+          ...(i === 1 ? [{ role: "assistant", content: [{ type: "text", text: "Prior answer" }],
+            timestamp: Date.now() - 2 * 3600 * 1000, stopReason: "stop" }] : []),
+          { role: "user", content: "use luna say hi" },
+        ] }, ctx);
+        expect(result.model.id).toBe(model.id);
+        handlers.get("message_end")!({ message: {
+          role: "assistant", provider: model.provider, model: model.id,
+          usage: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0 },
+        } }, ctx);
+        await (definition!.route as Function)({ reason: "continuation", messages: [] }, ctx);
+        handlers.get("message_end")!({ message: {
+          role: "assistant", provider: model.provider, model: model.id,
+          usage: { input: 20, output: 5, cacheRead: 25, cacheWrite: 0 },
+        } }, ctx);
+      }
+      const records = readFileSync(path, "utf-8").trim().split("\n").map(line => JSON.parse(line));
+      expect(records).toHaveLength(2);
+      expect(records[0].id).not.toBe(records[1].id);
+      expect(records[0].decision.reason).toContain("override");
+      expect(records[0].jev.request.state.session.context_tokens).toBeGreaterThan(400);
+      expect(records[0].jev.request.state.session.last_response_at).toBeNull();
+      expect(records[0].jev.request.state.session.last_response_seconds_ago).toBeNull();
+      expect(records[1].jev.request.state.session.last_response_seconds_ago).toBeGreaterThanOrEqual(7200);
+      expect(records[1].jev.request.state.purpose).toContain("long idle period");
+      expect(records[0].cache.agent_usage.cache_read_tokens).toBe(75);
+      expect(records[1].cache.agent_usage.cache_read_tokens).toBe(75);
+      expect(records[1].cache.agent_usage.input_tokens).toBe(120);
+      expect(records[1].response.observed_responses).toBe(2);
+      const result = await tool!.execute("test", { last: 1, detail: true }, undefined, undefined, ctx);
+      expect(result.content[0].text).toContain(model.id);
+      expect(result.content[0].text).toContain("75");
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+  test("Pi loads bundled skill frontmatter without warnings", () => {
+    for (const dir of ["skills/pi/jev-logs", "skills/jev-logs"]) {
+      const result = loadSkillsFromDir({ dir: join(ROOT, dir), source: "test" });
+      expect(result.diagnostics).toEqual([]);
+      expect(result.skills[0]?.name).toBe("jev-logs");
+      expect(result.skills[0]?.description).toBeTruthy();
+    }
   });
 });
 
 describe("Pi peer dependencies", () => {
+  test("typebox is host-provided with an optional wildcard peer and local dev dependency", () => {
+    expect(pkg.dependencies.typebox).toBeUndefined();
+    expect(pkg.peerDependencies.typebox).toBe("*");
+    expect(pkg.peerDependenciesMeta.typebox.optional).toBe(true);
+    expect(pkg.devDependencies.typebox).toBeDefined();
+  });
   test("peerDependencies declare Pi host packages as wildcard", () => {
     expect(pkg.peerDependencies).toBeDefined();
     expect(pkg.peerDependencies["@earendil-works/pi-coding-agent"]).toBe("*");
@@ -73,10 +174,10 @@ describe("Pi peer dependencies", () => {
     expect(deps["@earendil-works/pi-ai"]).toBeUndefined();
   });
 
-  test("Pi host packages are not in devDependencies", () => {
+  test("Pi host packages are dev dependencies for type-checking and adapter tests", () => {
     const devDeps = pkg.devDependencies ?? {};
-    expect(devDeps["@earendil-works/pi-coding-agent"]).toBeUndefined();
-    expect(devDeps["@earendil-works/pi-ai"]).toBeUndefined();
+    expect(devDeps["@earendil-works/pi-coding-agent"]).toBe("1.0.2");
+    expect(devDeps["@earendil-works/pi-ai"]).toBe("1.0.2");
   });
 });
 

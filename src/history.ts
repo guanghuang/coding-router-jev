@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, chmodSync, readdirSync, lstatSync, unlinkSync } from "node:fs";
+import { appendFileSync, mkdirSync, chmodSync, readdirSync, lstatSync, unlinkSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -31,7 +31,7 @@ export function cleanupStaleLogs(directory: string, retentionDays: number, agent
   }
   const cutoff = Date.now() - retentionDays * 86_400_000;
   for (const entry of entries) {
-    if (!pattern.test(entry)) continue;
+    if (!/^jev-.+\.jsonl$/.test(entry) && !pattern.test(entry)) continue;
     const filePath = join(directory, entry);
     try {
       const info = lstatSync(filePath);
@@ -49,9 +49,29 @@ export function sessionHistory(session: string, directory = DEFAULT_LOG_DIR, age
   }
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
-  const path = join(directory, `${agent}-${session.replace(/[^\w-]/g, "")}.jsonl`);
+  const path = join(directory, `jev-${session.replace(/[^\w-]/g, "")}.jsonl`);
   return {
     path,
+    update(id: string, update: (record: Record<string, any>) => Record<string, any>) {
+      const temporary = `${path}.tmp`;
+      try {
+        // ponytail: rewrite this session's log; use an indexed store if session logs become large.
+        const lines = readFileSync(path, "utf-8").trimEnd().split("\n");
+        let found = false;
+        const output = lines.map(line => {
+          const record = JSON.parse(line);
+          if (record.id !== id) return line;
+          found = true;
+          return JSON.stringify(update(record));
+        });
+        if (!found) return;
+        writeFileSync(temporary, `${output.join("\n")}\n`, { mode: 0o600 });
+        renameSync(temporary, path);
+      } catch {
+        try { unlinkSync(temporary); } catch {}
+        console.error("[Jev] could not update routing history");
+      }
+    },
     append(record: unknown) {
       try {
         appendFileSync(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
