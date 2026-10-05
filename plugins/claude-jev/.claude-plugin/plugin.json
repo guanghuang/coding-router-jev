@@ -1,6 +1,6 @@
 {
   "name": "claude-jev",
   "skills": [
-    "skills/jev-logs"
+    "./skills/jev-logs"
   ]
 }

@@ -171,7 +171,7 @@ export function generatePluginManifest(): string {
   return JSON.stringify(
     {
       name: PLUGIN_NAME,
-      skills: [`skills/${SKILL_NAME}`],
+      skills: [`./skills/${SKILL_NAME}`],
     },
     null,
     2,
