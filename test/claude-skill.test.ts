@@ -16,7 +16,7 @@ describe("generatePluginManifest", () => {
     const manifest = generatePluginManifest();
     const parsed = JSON.parse(manifest);
     expect(parsed.name).toBe("claude-jev");
-    expect(parsed.skills).toEqual(["skills/jev-logs"]);
+    expect(parsed.skills).toEqual(["./skills/jev-logs"]);
   });
 });
 
@@ -86,6 +86,7 @@ describe("generateClaudePlugin", () => {
       expect(existsSync(skillPath)).toBe(true);
       const skillContent = readFileSync(skillPath, "utf-8");
       expect(skillContent).toContain("jev-logs");
+      expect(skillContent.startsWith("---\n")).toBe(true);
       expect(skillContent).toContain("'/usr/local/bin/jev-logs'");
       expect(skillContent).toContain("'/tmp/session.jsonl'");
 
