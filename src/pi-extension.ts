@@ -438,12 +438,12 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false);
     }
 
-    if (!result.response) {
+    if (!result.response && !decide(prompt, undefined, undefined, state.tier, eligibleCandidates, config.minConfidence).reason.startsWith("override")) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, "JEV/unavailable", null,
         { ...baseMeta, jevResult: result, jevResponse: null, jevError: result.error, jevMs: result.ms });
     }
 
-    const modelAnswer = result.response.answers?.model;
+    const modelAnswer = result.response?.answers?.model;
     const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence)
       && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1
       ? modelAnswer.confidence : null;
@@ -460,7 +460,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     const selected = eligibleCandidates.find(c => c.tier === decision.tier) ?? eligibleCandidates[0];
     const { provider: selProvider, modelId: selModelId } = splitPiModelId(selected.id);
 
-    const effortAnswer = result.response.answers?.reasoning_effort;
+    const effortAnswer = result.response?.answers?.reasoning_effort;
     const desiredEffort = effortAnswer?.type === "choice"
       && Number.isFinite(effortAnswer.confidence)
       && effortAnswer.confidence >= config.minConfidence
@@ -484,9 +484,9 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       version: state.version + 1,
     };
 
-    const jevUsage = result.response.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-    const jevAnswers = result.response.answers;
-    return buildResult(selProvider, selModelId, effort, selected.tier, true, decisionLabel(decision.reason), confidence,
+    const jevUsage = result.response?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+    const jevAnswers = result.response?.answers;
+    return buildResult(selProvider, selModelId, effort, selected.tier, !!result.response, decisionLabel(decision.reason), confidence,
       { ...baseMeta, jevResult: result, requestedEffort: desiredEffort, jevUsage, jevMs: result.ms, jevAnswers });
   }
 

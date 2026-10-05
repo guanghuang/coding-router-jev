@@ -273,6 +273,16 @@ describe("createPiAdapter — user reason", () => {
     const result = await adapter.resolveModel({ reason: "user", text: "use strong then debug" });
     expect(result.tier).toBe("strong");
   });
+  test("leading override is honored when JEV is unavailable", async () => {
+    const adapter = createPiAdapter({
+      config: defaultConfig(), registry: fakeRegistry(DEFAULT_MODELS), clamp: fakeClamp(),
+      route: async () => ({ request: {} as any, response: null, error: "service down", ms: 0 }),
+    });
+    const result = await adapter.resolveModel({ reason: "user", text: "use strong say hi" });
+    expect(result.tier).toBe("strong");
+    expect(result.decision).toBe("override");
+    expect(result.fromClassifier).toBe(false);
+  });
 
   test("shared-model tiers (balanced+strong) produce distinct tiers with same model", async () => {
     const adapter = makeAdapter({ tier: "balanced", effort: "medium", confidence: 0.9 });
@@ -727,7 +737,7 @@ describe("activate", () => {
       },
       modelRegistry: fakeRegistry(DEFAULT_MODELS),
     };
-    const adapter = activate(mockPi, fakeClamp(DEFAULT_LEVELS), { route: fakeRoute() });
+    const adapter = activate(mockPi, fakeClamp(DEFAULT_LEVELS), { config: defaultConfig(), route: fakeRoute() });
     expect(resolverFn).toBeDefined();
     const result = await resolverFn!({ reason: "user", text: "test" });
     expect(result.provider).toBe("openai-codex");
@@ -798,7 +808,7 @@ describe("activate", () => {
       }),
       modelRegistry: fakeRegistry(DEFAULT_MODELS),
     };
-    activate(mockPi, fakeClamp(DEFAULT_LEVELS), { route: fakeRoute(), onResult: r => results.push(r) });
+    activate(mockPi, fakeClamp(DEFAULT_LEVELS), { config: defaultConfig(), route: fakeRoute(), onResult: r => results.push(r) });
     await resolverFn!({ reason: "user", text: "test" });
     expect(results).toHaveLength(1);
     expect(results[0].fromClassifier).toBe(true);
