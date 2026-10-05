@@ -2,6 +2,53 @@
 
 A TypeScript/Bun project that routes coding-agent user turns through JEV (the TypeSafe classifier). The `codex-jev` command wraps the Codex CLI; the `claude-jev` command wraps the Claude Code CLI; the Pi extension registers a `jev/auto` virtual model so Pi selects physical models and thinking levels automatically.
 
+## Quick start
+
+Install your coding agent first and authenticate it normally. The release binaries do not require Bun.
+
+**1. Install**
+
+macOS / Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
+```
+
+If macOS/Linux cannot find the installed commands, add `~/.local/bin` to your `PATH`:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**2. Configure JEV**
+
+Create or edit `~/.coding-router-jev.env` (`%USERPROFILE%\.coding-router-jev.env` on Windows) and add your TypeSafe credentials:
+
+```dotenv
+TYPESAFE_API_KEY=your-typesafe-api-key
+TYPESAFE_BASE_URL=https://your-typesafe-endpoint
+```
+
+Replace both values with those supplied by your TypeSafe service. This URL is the **JEV classifier endpoint**, separate from your coding agent's model provider URL. No other router settings are required; model mappings and routing behavior have defaults. Existing shell environment values override this file.
+
+**3. Launch**
+
+```sh
+codex-jev
+# Or, for Claude Code:
+claude-jev
+```
+
+For Pi, install the [Pi package](#install-as-a-pi-package), use the same configuration file, and launch `pi --model jev/auto`.
+
+The public installer requires a public repository and a published binary release. For an unreleased checkout, use [source installation](#install-from-source-bun-required).
+
 ## Prerequisites
 
 **Codex** — The `codex-jev` launcher requires the Codex CLI (`codex`) installed separately with its usual authentication. The router does not bundle or install Codex.
@@ -10,23 +57,23 @@ A TypeScript/Bun project that routes coding-agent user turns through JEV (the Ty
 
 **Pi** — The Pi extension requires `@earendil-works/pi-coding-agent` ≥ 1.0.2 and `@earendil-works/pi-ai` (declared as optional peer dependencies). Pi manages these packages; you do not install them manually. Node ≥ 22.19.0 is required by the Node package; Pi distributions that supply their own runtime do not require a separate Node installation.
 
+## Public release checklist (maintainers)
+
+Before changing repository visibility:
+
+- Scan the complete Git history for credentials and private data, not just the current files. Rotate any exposed credentials before publishing; deleting a file does not remove its history.
+- Review issues, pull requests, Actions logs/artifacts, and release assets for confidential content. These may become publicly accessible along with the code.
+- Keep `.env` files and session JSONL logs out of commits and bug reports. Retain the included MIT license and upstream attribution.
+- Commit the intended release changes, let CI pass, and publish a version tag matching `package.json` (currently `v0.1.0`). The release workflow builds binaries and checksums on `v*` tag pushes; a manual workflow run only builds artifacts.
+- Once the repository and release are public, test both installer commands without `GH_TOKEN` and verify the Pi package installation from the release tag.
+
+`"private": true` in `package.json` can stay: GitHub visibility and binary releases do not require npm publication.
+
 ## Distribution
 
 The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout. Each release includes binaries for `codex-jev`, `claude-jev`, and `jev-logs` for all supported platforms.
 
-The repository is currently **private**. Installation commands that fetch raw files from `raw.githubusercontent.com` or download release assets without authentication will fail until the repository is made public. The sections below label each command as **Private repository** or **Public repository (once public)** so you can tell at a glance which commands work today.
-
-**Private repository authentication:** `install.sh` and `install.ps1` attach `Authorization` only when **`GH_TOKEN` is set in the environment**. They do not read the GitHub CLI credential store. After `gh auth login`, export a token for the installer session:
-
-```sh
-export GH_TOKEN="$(gh auth token)"   # macOS/Linux
-```
-
-```powershell
-$env:GH_TOKEN = gh auth token        # Windows PowerShell
-```
-
-Use a fine-grained or classic PAT with read access to this repository and its releases if you do not use the GitHub CLI. `GH_TOKEN` is used only for in-process HTTP requests; the installers never write it to disk or to `~/.coding-router-jev.env`.
+Public downloads do not require GitHub credentials.
 
 ## Install from release (recommended)
 
@@ -36,52 +83,18 @@ Download a prebuilt standalone binary from [GitHub Releases](https://github.com/
 
 The `install.sh` script detects your OS and architecture, downloads the correct binaries for `codex-jev`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and places them in `~/.local/bin`. No sudo required.
 
-**Public repository (once public):**
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
 ```
 
 Prefer [download and review](#download-and-review-before-executing-macoslinux) or pin a release tag instead of piping `main` blindly.
 
-**Private repository (requires authentication):**
-
-```sh
-# Recommended: clone with gh, then install from the checkout
-gh auth login
-gh repo clone guanghuang/coding-router-jev
-export GH_TOKEN="$(gh auth token)"
-sh coding-router-jev/install.sh
-```
-
-```sh
-# Alternative: download install.sh with an authenticated request, then run
-export GH_TOKEN="ghp_your_token"
-curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
-  https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
-sh install.sh
-unset GH_TOKEN
-```
-
 #### Download and review before executing (macOS/Linux)
-
-**Public repository (once public):**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
 less install.sh      # review the script
 sh install.sh        # run after review
-```
-
-**Private repository (requires authentication):**
-
-```sh
-export GH_TOKEN="$(gh auth token)"
-curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
-  https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh -o install.sh
-less install.sh
-sh install.sh
-unset GH_TOKEN
 ```
 
 #### Installer flags (macOS/Linux)
@@ -91,7 +104,6 @@ unset GH_TOKEN
 | `--version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `--dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `~/.local/bin`). Use an absolute path; `~` is not expanded. |
 | `--help` | — | Show usage |
-| — | `GH_TOKEN` | GitHub token for private release/API access (process environment only; not saved by the installer) |
 
 **Version pinning and rollback:**
 
@@ -127,53 +139,18 @@ Re-running `install.sh` (with or without `--version`) replaces only the `codex-j
 
 The `install.ps1` PowerShell script downloads the Windows x64 binaries for `codex-jev`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and installs them to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
 
-**Public repository (once public):**
-
 ```powershell
 irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
 ```
 
 Prefer [download and review](#download-and-review-before-executing-windows) when you want to inspect the script first.
 
-**Private repository (requires authentication):**
-
-```powershell
-# Recommended: clone with gh, then install from the checkout
-gh auth login
-gh repo clone guanghuang/coding-router-jev
-$env:GH_TOKEN = gh auth token
-.\coding-router-jev\install.ps1
-Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
-```
-
-```powershell
-# Alternative: download install.ps1 with an authenticated request
-$env:GH_TOKEN = "ghp_your_token"
-$headers = @{ Authorization = "token $env:GH_TOKEN" }
-Invoke-RestMethod -Uri "https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1" -Headers $headers -OutFile install.ps1
-.\install.ps1
-Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
-```
-
 #### Download and review before executing (Windows)
-
-**Public repository (once public):**
 
 ```powershell
 irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
 Get-Content install.ps1   # review the script
 .\install.ps1              # run after review
-```
-
-**Private repository (requires authentication):**
-
-```powershell
-$env:GH_TOKEN = gh auth token
-$headers = @{ Authorization = "token $env:GH_TOKEN" }
-Invoke-RestMethod -Uri "https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1" -Headers $headers -OutFile install.ps1
-Get-Content install.ps1
-.\install.ps1
-Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 ```
 
 #### Installer flags (Windows)
@@ -183,7 +160,6 @@ Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
 | `-Version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `-Dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `$env:LOCALAPPDATA\coding-router-jev\bin`) |
 | `-Help` | — | Show usage |
-| — | `GH_TOKEN` | GitHub token for private release/API access (process environment only; not saved by the installer) |
 
 **Version pinning and rollback:**
 
@@ -220,7 +196,7 @@ Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.e
 
 ### Manual download
 
-While the repository is **private**, run `gh auth login` first so `gh release download` can access assets. After the repository is public, the same commands work without extra setup.
+Download assets directly from the release page, or use the GitHub CLI below.
 
 ```sh
 # Download the latest release (requires gh CLI and repository access)
@@ -279,15 +255,17 @@ Alpine/musl Linux and Windows ARM64 are not supported. Binaries are unsigned; ma
 
 Pi manages extensions and packages natively. Installing this repository as a Pi package registers the `jev/auto` virtual model and delivers the Pi-specific `jev-logs` skill. No `bun link` is required.
 
-### From Git (private repository — requires authentication)
+### From Git
 
-While the repository is private, Pi needs authenticated Git access. Configure Git with your GitHub credentials (SSH key, credential helper, or `GH_TOKEN`), then install:
+Install from a released tag:
 
 ```sh
-pi install git:github.com/guanghuang/coding-router-jev
+pi install git:github.com/guanghuang/coding-router-jev@v0.1.0
 ```
 
-Pi clones the repository, resolves dependencies through its supported mechanism, and registers the package. Do not include credential URLs in the install command. If using `GH_TOKEN`, avoid inline assignment (`GH_TOKEN=… pi install …`) — it exposes the token in process listings and shell history. Export the token first, then unset it after installation.
+Replace `v0.1.0` with the desired release tag. Omitting the tag tracks the default branch, which may introduce unexpected changes on reinstall — prefer pinning a tag for reproducible installs.
+
+### Local development
 
 For **local development**, install from an absolute path to your checkout:
 
@@ -300,16 +278,6 @@ pi install C:\Users\you\coding-router-jev
 ```
 
 Local dependencies must be installed with the repository's supported development workflow (`bun install`) before the local Pi install.
-
-### From Git (public repository — once public)
-
-After the repository is made public, install from a released tag:
-
-```sh
-pi install git:github.com/guanghuang/coding-router-jev@v0.1.0
-```
-
-Replace `v0.1.0` with the desired release tag. Omitting the tag tracks the default branch, which may introduce unexpected changes on reinstall — prefer pinning a tag for reproducible installs.
 
 ### Select the virtual model
 
@@ -396,7 +364,7 @@ Without `TYPESAFE_API_KEY`, the launcher reports that routing is disabled and st
 
 Key behaviors:
 - **Default routing model**: With JEV enabled, the launcher selects its routing model even if `ANTHROPIC_MODEL` is set. Configure tier models with `CODING_ROUTER_*_MODEL_CLAUDE`. An explicit `--model` argument still bypasses routing. Without JEV enabled, the original Claude model configuration is preserved.
-- **Routing feedback and status line**: Each routed user intent adds a formatted `[Jev]` decision notice to the assistant response text using `CODING_ROUTER_FEEDBACK_FORMAT`, for streaming and JSON responses. Feedback is removed from forwarded history, and continuations/retries do not repeat it. Codex, Claude, and Pi use `CODING_ROUTER_STATUS_FORMAT` for status display (default `[Jev] {model} · {effort}`); status is off by default and enabled globally with `CODING_ROUTER_STATUS_SHOW=true`. Codex substitutes `Coding Router Jev` for `{model}` and adds its selected effort natively. For Codex, turning status off empties only the router model label and preserves the rest of its footer. Response notices can be hidden independently with `CODING_ROUTER_FEEDBACK_SHOW=false`. Codex adds feedback to the assistant response text. Claude status uses a temporary file and does not change global settings; existing user/project status lines and explicit `--settings` arguments are preserved. The Claude status line requires a shell with `cat` (Git Bash on Windows) and is not displayed in `--print` mode. Status formats use `{model}` and `{effort}`; feedback-only placeholders are separate.
+- **Routing feedback and status line**: Each routed user intent adds a formatted `[Jev]` decision notice to the assistant response text using `CODING_ROUTER_FEEDBACK_FORMAT`, for streaming and JSON responses. Feedback is removed from forwarded history, and continuations/retries do not repeat it. Codex, Claude, and Pi use `CODING_ROUTER_STATUS_FORMAT` for status display (default `[Jev] {model} · {effort}`); Claude/Pi status is off by default and enabled with `CODING_ROUTER_STATUS_SHOW=true`. Codex substitutes `Coding Router Jev` for `{model}` and adds its selected effort natively. Codex always shows its router model label: `CODING_ROUTER_STATUS_SHOW` does not affect Codex because that label is shared with its model picker. Response notices can be hidden independently with `CODING_ROUTER_FEEDBACK_SHOW=false`. Codex adds feedback to the assistant response text. Claude status uses a temporary file and does not change global settings; existing user/project status lines and explicit `--settings` arguments are preserved. The Claude status line requires a shell with `cat` (Git Bash on Windows) and is not displayed in `--print` mode. Status formats use `{model}` and `{effort}`; feedback-only placeholders are separate.
 - **Session-local plugin**: The launcher generates a temporary Claude plugin directory with the `jev-logs` skill and passes it via `--plugin-dir`. The plugin is scoped to the current session and is not installed globally. Use `/claude-jev:jev-logs` to query routing decisions.
 - **Opt-out**: Set `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL=false` to disable the jev-logs plugin.
 - **No unsupported transports**: Bedrock and Vertex AI base URLs are rejected with an explicit error. Use the native Claude CLI directly for those providers.
@@ -447,11 +415,10 @@ Running `claude` directly (without `claude-jev`) returns to normal Claude Code b
 
 ## Install from source (Bun required)
 
-Running from source requires [Bun](https://bun.sh/). While the repository is **private**, clone with `gh repo clone guanghuang/coding-router-jev` after `gh auth login` instead of anonymous `git clone`.
+Running from source requires [Bun](https://bun.sh/).
 
 ```sh
-gh auth login   # private repository only
-gh repo clone guanghuang/coding-router-jev
+git clone https://github.com/guanghuang/coding-router-jev.git
 cd coding-router-jev
 bun install
 ```
@@ -537,7 +504,7 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 | `CODING_ROUTER_SEND_RECENT_CONTEXT` | `true` |
 | `CODING_ROUTER_FEEDBACK_FORMAT` | Response feedback format; unset uses the detailed built-in notice |
 | `CODING_ROUTER_STATUS_FORMAT` | Status format for Codex/Claude/Pi; unset uses `[Jev] {model} · {effort}` |
-| `CODING_ROUTER_STATUS_SHOW` | Show available status lines (Codex/Claude/Pi); default `false` |
+| `CODING_ROUTER_STATUS_SHOW` | Show Claude/Pi status lines; default `false`. Codex always shows its router label |
 | `CODING_ROUTER_FEEDBACK_SHOW` | Show response feedback across agents; default `true` |
 | `CODING_ROUTER_LOG_RETENTION_DAYS` | Unset (no cleanup); positive number enables startup deletion of stale session logs older than this many days |
 | `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL` | `true`; set to `false` to skip automatic `jev-logs` skill installation |
@@ -814,26 +781,6 @@ If `sha256sum --check SHA256SUMS` fails or the installer reports `checksum misma
 1. Re-download the binary and `SHA256SUMS` from the same release tag.
 2. Ensure you did not mix assets from different releases.
 3. If the mismatch persists, the download may have been corrupted in transit. Try a different network or download method (`gh release download` vs. direct URL).
-
-### Authentication errors (private repository)
-
-While the repository is private, release downloads and (when not using a local checkout) raw script fetches require authentication. Set `GH_TOKEN` before running the installer:
-
-```sh
-export GH_TOKEN="$(gh auth token)"
-sh install.sh
-unset GH_TOKEN
-```
-
-```powershell
-$env:GH_TOKEN = gh auth token
-.\install.ps1
-Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
-```
-
-Look for `authorization failed while trying to` in installer output. `gh auth login` alone is not enough unless you export `GH_TOKEN` as above. If downloads of `install.sh` / `install.ps1` from `raw.githubusercontent.com` fail with 404/401, use `gh repo clone` or an authenticated `curl`/`Invoke-RestMethod` fetch (see the **Private repository (requires authentication)** install sections above). Prefer cloning a release tag and running `install.sh` from that checkout when you want the installer script pinned to a version.
-
-Verify your token can read this repository and its releases (fine-grained read access to contents and releases is preferred over broad classic `repo` scope). Avoid prefix assignments like `GH_TOKEN=… sh install.sh` — they expose the token in process listings and shell history.
 
 ### Release not found / unavailable
 

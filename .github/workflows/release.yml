@@ -301,9 +301,9 @@ jobs:
           - **Claude Code CLI** (`claude`) must be installed and authenticated separately for `claude-jev`.
           - The router does **not** bundle or install Codex or Claude.
 
-          ### Download (private repository)
+          ### Download
 
-          Use `gh` CLI or the GitHub API with a personal access token:
+          Download assets from this release page, or use the `gh` CLI below. Public downloads do not require a token; private forks require repository read access. See the [Quick start](https://github.com/REPO_PLACEHOLDER#quick-start) for installation and JEV configuration.
 
           ```sh
           # Download all assets for this release

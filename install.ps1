@@ -7,11 +7,10 @@
     verifies their SHA-256 checksums, and installs them to the user-local
     application directory.
 
-    Usage (public repository, once public):
+    Usage (public repository):
       irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
 
-    Usage (private repository or download-and-review):
-      $env:GH_TOKEN = "ghp_..."
+    Usage (download-and-review, public repository):
       irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 -OutFile install.ps1
       Get-Content install.ps1   # review the script
       .\install.ps1

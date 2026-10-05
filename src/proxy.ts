@@ -47,8 +47,7 @@ export function candidatesFor(config: Config, catalog: Map<string, CatalogModel>
     return { tier, id, description: [model?.display_name ?? id, model?.description, model?.context_window && `${model.context_window} context tokens`].filter(Boolean).join("; "), efforts, defaultEffort: model?.default_reasoning_level ?? (efforts.includes("medium") ? "medium" : efforts[0]), capacity };
   });
 }
-export function codexStatusModelName(format?: string, show = true): string {
-  if (!show) return "";
+export function codexStatusModelName(format?: string): string {
   return (format ?? DEFAULT_STATUS_FORMAT)
     .replaceAll("{model}", "Coding Router Jev")
     .replace(/\s*\{effort\}\s*$/, "")
@@ -178,8 +177,8 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
           if (Array.isArray(data.models)) {
             for (const model of data.models) catalog.set(model.slug, model);
             const autoModel = data.models.find(model => model.slug === AUTO_MODEL);
-            if (autoModel) autoModel.display_name = codexStatusModelName(config.statusFormat, config.showStatus);
-            else if (data.models[0]) data.models.unshift({ ...data.models[0], slug: AUTO_MODEL, display_name: codexStatusModelName(config.statusFormat, config.showStatus), description: "JEV selects the model tier and reasoning effort for each turn.", visibility: "list", supported_in_api: true, priority: 0, upgrade: null });
+            if (autoModel) autoModel.display_name = codexStatusModelName(config.statusFormat);
+            else if (data.models[0]) data.models.unshift({ ...data.models[0], slug: AUTO_MODEL, display_name: codexStatusModelName(config.statusFormat), description: "JEV selects the model tier and reasoning effort for each turn.", visibility: "list", supported_in_api: true, priority: 0, upgrade: null });
           }
           return Response.json(data, { status: response.status, headers: responseHeaders });
         }

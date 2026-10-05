@@ -103,7 +103,6 @@ test("launcher selects a separate provider and isolates the Codex daemon", () =>
   expect(codexArgs("http://127.0.0.1:1234", ["-m", "manual"]).filter(arg => arg === AUTO_MODEL)).toHaveLength(0);
   expect(codexStatusModelName()).toBe("[Jev] Coding Router Jev ·");
   expect(codexStatusModelName("[Jev] {model} / {effort}")).toBe("[Jev] Coding Router Jev /");
-  expect(codexStatusModelName(undefined, false)).toBe("");
 });
 
 
