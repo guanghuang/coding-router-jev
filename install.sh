@@ -5,7 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
 #
 # Usage (private repository or local script):
-#   GH_TOKEN=ghp_... sh install.sh
+#   # For private releases, export GH_TOKEN before running the local script.
+#   sh install.sh
 #   sh install.sh --version v0.1.0
 #   sh install.sh --dir /usr/local/bin
 #

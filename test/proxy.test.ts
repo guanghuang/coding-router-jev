@@ -34,6 +34,8 @@ test("proxy routes once per turn, keeps tool continuations, streams notices once
   try {
     const catalog = await fetch(`${local}/models`).then(res => res.json());
     expect(catalog.models[0].slug).toBe(AUTO_MODEL);
+    // Status is hidden by default, but the shared catalog label must remain visible in Codex.
+    expect(catalog.models[0].display_name).toBe("[Jev] Coding Router Jev ·");
     await send([{ role: "user", content: "# AGENTS.md instructions\n\n<INSTRUCTIONS>Repository rules</INSTRUCTIONS><environment_context>cwd: /repo</environment_context>" }]);
     expect(inputs).toHaveLength(0);
     const first: Item = { role: "user", content: "implement first" };
