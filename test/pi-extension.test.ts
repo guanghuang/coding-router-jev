@@ -285,7 +285,7 @@ describe("createPiAdapter — user reason", () => {
     });
     const result = await adapter.resolveModel({ reason: "user", text: "use strong say hi" });
     expect(result.tier).toBe("strong");
-    expect(result.decision).toBe("override");
+    expect(result.decision).toBe("override/upgrade");
     expect(result.fromClassifier).toBe(false);
   });
 

@@ -113,12 +113,12 @@ test("custom feedback format with all placeholders verified through proxy", asyn
     await send([first]);
     expect(notices).toHaveLength(1);
     // Turn 1: verify ALL placeholders including jev_tokens_input/output (M1+M3)
-    expect(notices[0]).toBe("[Jev] strong · gpt-6.1-sol · high · JEV · 0.90 · prev:chatgpt-6-luna · cr:unavailable · cw:unavailable · jin:1 · jout:1 · jtotal:2");
+    expect(notices[0]).toBe("[Jev] strong · gpt-6.1-sol · high · JEV/upgrade · 0.90 · prev:chatgpt-6-luna · cr:unavailable · cw:unavailable · jin:1 · jout:1 · jtotal:2");
     // Turn 2: routes to balanced; previous_model should reflect model from turn 1 (M2)
     const second: Item = { role: "user", content: "follow up" };
     await send([first, { role: "assistant", content: "answer" }, second]);
     expect(notices).toHaveLength(2);
-    expect(notices[1]).toBe("[Jev] balanced · gpt-6.1-sol · low · JEV · 0.90 · prev:gpt-6.1-sol · cr:42 · cw:7 · jin:1 · jout:1 · jtotal:2");
+    expect(notices[1]).toBe("[Jev] balanced · gpt-6.1-sol · low · JEV/downgrade · 0.90 · prev:gpt-6.1-sol · cr:42 · cw:7 · jin:1 · jout:1 · jtotal:2");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
