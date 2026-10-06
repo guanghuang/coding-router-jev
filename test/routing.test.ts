@@ -12,7 +12,7 @@ const candidates = candidatesFor(configFromEnv({}), new Map());
 test("confidence policy preserves tiers even when models are shared, with no cache guard", () => {
   expect(candidates.map(candidate => candidate.tier)).toEqual(["fast", "balanced", "strong"]);
   expect(candidates[1].id).toBe(candidates[2].id);
-  expect(decide("debug", "strong", 0.1, "fast", candidates, 0.3)).toEqual({ tier: "balanced", reason: "low-confidence-capped" });
+  expect(decide("debug", "strong", 0.1, "fast", candidates, 0.3)).toEqual({ tier: "balanced", reason: "low-confidence-capped/upgrade" });
   expect(decide("hi", "fast", 0.1, "strong", candidates, 0.3).tier).toBe("strong");
   expect(decide("hi", "fast", 0.8, "strong", candidates, 0.3).tier).toBe("fast");
   expect(decide("use long", "long", 1, "fast", candidates, 0.3).tier).toBe("fast");
@@ -26,7 +26,7 @@ test("decision feedback labels cover every user-facing policy outcome", () => {
     "jev/no-change": "JEV/no-change",
     "low-confidence-no-downgrade/no-change": "low-confidence/no-change",
     "low-confidence-capped": "low-confidence/capped",
-    "low-confidence-capped/no-change": "low-confidence/capped",
+    "low-confidence-capped/no-change": "low-confidence/capped/no-change",
     "low-confidence-capped+unavailable/no-change": "low-confidence/unavailable",
     "jev-unavailable/no-change": "JEV/unavailable",
     override: "override",
@@ -34,6 +34,26 @@ test("decision feedback labels cover every user-facing policy outcome", () => {
     "override+unavailable/no-change": "override/unavailable",
   };
   for (const [reason, label] of Object.entries(outcomes)) expect(decisionLabel(reason)).toBe(label);
+});
+
+test("policy reports accepted tier transitions and confidence-limited outcomes", () => {
+  for (const current of candidates) {
+    for (const selected of candidates) {
+      const action = selected.tier === current.tier ? "no-change"
+        : candidates.indexOf(selected) > candidates.indexOf(current) ? "upgrade" : "downgrade";
+      for (const override of [false, true]) {
+        const result = decide(override ? `use ${selected.tier}` : "debug", selected.tier, 0.9, current.tier, candidates, 0.3);
+        expect(result).toEqual({ tier: selected.tier, reason: `${override ? "override" : "jev"}/${action}` });
+        expect(decisionLabel(result.reason)).toBe(`${override ? "override" : "JEV"}/${action}`);
+      }
+    }
+  }
+  const capped = decide("debug", "strong", 0.1, "fast", candidates, 0.3);
+  expect(decisionLabel(capped.reason)).toBe("low-confidence/capped/upgrade");
+  const retained = decide("debug", "strong", 0.1, "balanced", candidates, 0.3);
+  expect(decisionLabel(retained.reason)).toBe("low-confidence/capped/no-change");
+  const blocked = decide("hi", "fast", 0.1, "strong", candidates, 0.3);
+  expect(blocked).toEqual({ tier: "strong", reason: "low-confidence-no-downgrade/no-change" });
 });
 
 test("recent context is bounded text and tool continuations do not start a new turn", () => {

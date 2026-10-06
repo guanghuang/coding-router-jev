@@ -634,6 +634,8 @@ The three score questions (`task_complexity`, `reasoning_required`, `tool_comple
 
 ### Routing notices
 
+Decision feedback includes the accepted tier transition: `JEV/upgrade`, `JEV/downgrade`, or `JEV/no-change`. Explicit overrides use `override/upgrade`, `override/downgrade`, or `override/no-change`. Confidence-capped outcomes retain their policy detail, such as `low-confidence/capped/upgrade` or `low-confidence/capped/no-change`. Direction follows tier order (Fast → Balanced → Strong → Long), even when tiers share a model; it does not describe an effort-only change. Existing unavailable and blocked-downgrade labels remain unchanged. JSONL decision reasons also include the transition.
+
 The proxy adds a configurable routing notice (see [Feedback format](#feedback-format)) as assistant commentary in eligible response streams. Eligible streams are those with `Content-Type` of `text/event-stream` or `application/octet-stream`, as well as responses where the upstream `Content-Type` header is absent; in the latter case, a notice is added only when the response body contains SSE-shaped frames. Non-streaming JSON responses do not receive a notice. Concurrent requests for a turn produce one decision and one notice.
 
 ### Reasoning effort and cache reuse

@@ -3,7 +3,7 @@ import { TIERS, type Candidate, type EligibilityResult, type Tier } from "./type
 export function decide(prompt: string, choice: string | undefined, confidence: number | undefined, current: Tier, candidates: Candidate[], minConfidence: number, extraAliases?: Record<string, Tier>) {
   const available = candidates.map(candidate => candidate.tier);
   const rank = (tier: Tier) => TIERS.indexOf(tier);
-  const finish = (tier: Tier, reason: string) => ({ tier, reason: tier === current ? `${reason}/no-change` : reason });
+  const finish = (tier: Tier, reason: string) => ({ tier, reason: `${reason}/${tier === current ? "no-change" : rank(tier) > rank(current) ? "upgrade" : "downgrade"}` });
   const aliasKeys = extraAliases ? Object.keys(extraAliases).join("|") : "";
   const overridePattern = new RegExp(`^\\s*(?:please\\s+)?(?:use|switch to|with)\\s+(fast|balanced|strong|long|luna|sol|astra${aliasKeys ? "|" + aliasKeys : ""})\\b`, "i");
   const override = prompt.match(overridePattern)?.[1].toLowerCase();
@@ -34,7 +34,7 @@ const DECISION_LABELS: Record<string, string> = {
   "jev/no-change": "JEV/no-change",
   "low-confidence-no-downgrade/no-change": "low-confidence/no-change",
   "low-confidence-capped": "low-confidence/capped",
-  "low-confidence-capped/no-change": "low-confidence/capped",
+  "low-confidence-capped/no-change": "low-confidence/capped/no-change",
   "low-confidence-capped+unavailable/no-change": "low-confidence/unavailable",
   "jev-unavailable/no-change": "JEV/unavailable",
   override: "override",
@@ -42,6 +42,11 @@ const DECISION_LABELS: Record<string, string> = {
   "override+unavailable/no-change": "override/unavailable",
 };
 export function decisionLabel(reason: string): string {
+  const transition = reason.match(/\/(upgrade|downgrade)$/);
+  if (transition) {
+    const source = reason.slice(0, -transition[0].length);
+    return `${DECISION_LABELS[source] ?? source}/${transition[1]}`;
+  }
   return DECISION_LABELS[reason] ?? reason;
 }
 
