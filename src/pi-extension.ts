@@ -1,6 +1,6 @@
 import { configFromEnv, loadEnv, type Config } from "./config";
 import { createRouter, buildRequest, type CallerOptions, type Route, type RoutingResult } from "./router";
-import { decide, decisionLabel, checkEligibility } from "./policy";
+import { decide, decisionLabel } from "./policy";
 import { TIERS, type Candidate, type Tier, type ContextEvidence } from "./types";
 import { formatFeedback, formatStatus, type FeedbackValues } from "./feedback";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
@@ -384,13 +384,6 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     const contextTokens = Number.isFinite(request.contextTokens) && request.contextTokens! >= 0
       ? request.contextTokens! : contextEvidence.tokens;
 
-    const eligibility = checkEligibility(candidates, contextTokens, 16_000);
-    const eligibleCandidates = [...eligibility.eligible, ...eligibility.unknown];
-    if (eligibleCandidates.length === 0) {
-      return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, "capacity/no-eligible", null,
-        { ...baseMeta, capacityStatus: "no-eligible", capacityReason: "all candidates rejected by capacity check" });
-    }
-
     const recentContext = config.sendRecentContext && request.priorContext ? {
       previous_user_request: (request.priorContext.userExcerpt ?? "").slice(0, 1000),
       ...(request.priorContext.assistantExcerpt ? { previous_assistant_excerpt: request.priorContext.assistantExcerpt.slice(0, 1000) } : {}),
@@ -412,7 +405,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
           && request.lastResponseTimestamp! > 0 && request.lastResponseTimestamp! <= Date.now()
           ? Math.floor((Date.now() - request.lastResponseTimestamp!) / 1000) : null,
       },
-      candidates: eligibleCandidates,
+      candidates,
       recentContext,
       agent: "pi" as const,
       callerOptions,
@@ -436,7 +429,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false);
     }
 
-    if (!result.response && !decide(prompt, undefined, undefined, state.tier, eligibleCandidates, config.minConfidence).reason.startsWith("override")) {
+    if (!result.response && !decide(prompt, undefined, undefined, state.tier, candidates, config.minConfidence).reason.startsWith("override")) {
       return buildResult(state.provider, state.modelId, state.effectiveEffort, state.tier, false, "JEV/unavailable", null,
         { ...baseMeta, jevResult: result, jevResponse: null, jevError: result.error, jevMs: result.ms });
     }
@@ -451,11 +444,11 @@ export function createPiAdapter(options: CreateAdapterOptions) {
       modelAnswer?.type === "choice" ? modelAnswer.choice : undefined,
       confidence ?? undefined,
       state.tier,
-      eligibleCandidates,
+      candidates,
       config.minConfidence,
     );
 
-    const selected = eligibleCandidates.find(c => c.tier === decision.tier) ?? eligibleCandidates[0];
+    const selected = candidates.find(c => c.tier === decision.tier) ?? candidates[0];
     const { provider: selProvider, modelId: selModelId } = splitPiModelId(selected.id);
 
     const effortAnswer = result.response?.answers?.reasoning_effort;

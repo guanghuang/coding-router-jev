@@ -684,14 +684,14 @@ describe("createPiAdapter — missing model/auth errors", () => {
 });
 
 describe("capacity eligibility", () => {
-  test("200K candidate rejected for 300K context; 1M candidate eligible", async () => {
-    const adapter = makeAdapter({ tier: "strong", effort: "high", confidence: 0.9 });
+  test("JEV can select a smaller-window model despite the session context estimate", async () => {
+    const adapter = makeAdapter({ tier: "fast", effort: "low", confidence: 0.9 });
     const result = await adapter.resolveModel({
       reason: "user",
       text: "large context task",
       contextTokens: 300_000,
     });
-    expect(result.modelId).toBe("gpt-6.1-sol");
+    expect(result.modelId).toBe("gpt-6-luna");
   });
 });
 
@@ -926,8 +926,8 @@ describe("prior context capping", () => {
   });
 });
 
-describe("capacity — all candidates rejected", () => {
-  test("returns current model with capacity/no-eligible decision when all rejected", async () => {
+describe("long-session routing", () => {
+  test("calls JEV even when the context estimate exceeds every candidate window", async () => {
     const smallModels: PiModelInfo[] = [
       { provider: "openai-codex", modelId: "gpt-6-luna", displayName: "Luna", contextWindow: 50_000, thinkingLevels: ["off", "low", "medium"], authenticated: true },
     ];
@@ -946,9 +946,10 @@ describe("capacity — all candidates rejected", () => {
       text: "huge context",
       contextTokens: 100_000,
     });
-    expect(getCount()).toBe(0);
-    expect(result.fromClassifier).toBe(false);
-    expect(result.decision).toBe("capacity/no-eligible");
+    expect(getCount()).toBe(1);
+    expect(result.fromClassifier).toBe(true);
+    expect(result.decision).toBe("JEV/no-change");
+    expect(result.confidence).toBe(0.9);
   });
 });
 
