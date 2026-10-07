@@ -1,6 +1,6 @@
 {
   "name": "coding-router-jev",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Routes Codex turns through JEV with configurable models and reasoning effort",
   "license": "MIT",
