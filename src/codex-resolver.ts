@@ -12,7 +12,7 @@
  *    names the family, and/or a flag advertising the entry as the current
  *    latest model for that family.
  * 2. Otherwise recognize only strict documented ID patterns
- *    `(gpt|chatgpt)-<dotted numeric version>-<luna|sol|astra>` and compare
+ *    `(gpt|chatgpt)-<dotted numeric version>-<luna|terra|sol|astra>` and compare
  *    numeric version tuples (6.10 > 6.9), never lexicographic order or
  *    response order.
  * 3. Exclude preview/beta/rc-style variants unless explicitly advertised as
@@ -22,7 +22,7 @@
  * effort/context metadata from the resolved entry itself.
  */
 
-export const CODEX_LATEST_FAMILIES = ["luna", "sol", "astra"] as const;
+export const CODEX_LATEST_FAMILIES = ["luna", "terra", "sol", "astra"] as const;
 export type CodexLatestFamily = (typeof CODEX_LATEST_FAMILIES)[number];
 
 /** Virtual router model ID; it is never a discovery candidate. `proxy.ts` re-exports it as `AUTO_MODEL`. */
@@ -48,10 +48,10 @@ export class CodexLatestResolutionError extends Error {
   }
 }
 
-/** Parse `luna:latest` / `sol:latest` / `astra:latest` (case/space tolerant). */
+/** Parse `luna:latest` / `terra:latest` / `sol:latest` / `astra:latest` (case/space tolerant). */
 export function parseLatestAlias(value: unknown): CodexLatestFamily | null {
   if (typeof value !== "string") return null;
-  const match = /^(luna|sol|astra):latest$/.exec(value.trim().toLowerCase());
+  const match = /^(luna|terra|sol|astra):latest$/.exec(value.trim().toLowerCase());
   return match ? (match[1] as CodexLatestFamily) : null;
 }
 
@@ -95,7 +95,7 @@ export function compareVersionTuples(a: number[], b: number[]): number {
   return 0;
 }
 
-const ID_PATTERN = /^(?:gpt|chatgpt)-(\d+(?:\.\d+)*)-(luna|sol|astra)$/i;
+const ID_PATTERN = /^(?:gpt|chatgpt)-(\d+(?:\.\d+)*)-(luna|terra|sol|astra)$/i;
 const PREVIEW_ID = /(?:^|-)(?:preview|beta|alpha|rc|pre|dev|experimental)(?:-|$)/i;
 
 function stringField(entry: CatalogEntryLike, keys: string[]): string | undefined {

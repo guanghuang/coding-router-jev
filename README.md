@@ -502,7 +502,7 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 | `TYPESAFE_BASE_URL` | Optional SDK endpoint override |
 | `TYPESAFE_DEFAULT_MODEL` | Optional JEV model override; otherwise the SDK default |
 | `CODING_ROUTER_FAST_MODEL_CODEX` | `luna:latest` (see below); or an exact ID to pin |
-| `CODING_ROUTER_BALANCED_MODEL_CODEX` | `sol:latest`; or an exact ID to pin |
+| `CODING_ROUTER_BALANCED_MODEL_CODEX` | `terra:latest`; or an exact ID to pin |
 | `CODING_ROUTER_STRONG_MODEL_CODEX` | `sol:latest`; or an exact ID to pin |
 | `CODING_ROUTER_LONG_MODEL_CODEX` | `astra:latest`; or an exact ID to pin (used only when Long is enabled) |
 | `CODING_ROUTER_LONG_MODEL_ENABLE` | `false` |
@@ -518,7 +518,7 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 
 Configured model choices take priority over catalog detection. The catalog enriches descriptions and effort capabilities. An explicitly configured exact ID (for example `chatgpt-6.1-sol`) is sent unchanged — apart from the existing `chatgpt-6*` to catalog `gpt-6*` slug matching — and is never silently upgraded or rewritten as a latest alias. Account model availability is ultimately enforced by the provider.
 
-By default, the Codex model variables are latest-family aliases: `luna:latest`, `sol:latest`, and `astra:latest`. Balanced and Strong share the `sol:latest` default but remain distinct tiers with their own reasoning-effort policy. An alias is resolved once per launcher session — from the authenticated Codex model catalog, lazily on the first routing request if no catalog has been seen yet — to an exact catalog ID, and that exact ID is pinned for the rest of the session and used for routing, feedback notices, and JSONL logs. The alias itself is never sent upstream, and the resolved exact ID is what feedback and logs show. Restarting the launcher re-resolves the aliases, so a new startup may pick a newer exact model and incur different cost or behavior than the previous session; there is no live switching mid-session.
+By default, the Codex model variables are latest-family aliases: `luna:latest`, `terra:latest`, `sol:latest`, and `astra:latest`. Balanced defaults to `terra:latest` and Strong to `sol:latest`, with their own reasoning-effort policies. An alias is resolved once per launcher session — from the authenticated Codex model catalog, lazily on the first routing request if no catalog has been seen yet — to an exact catalog ID, and that exact ID is pinned for the rest of the session and used for routing, feedback notices, and JSONL logs. The alias itself is never sent upstream, and the resolved exact ID is what feedback and logs show. Restarting the launcher re-resolves the aliases, so a new startup may pick a newer exact model and incur different cost or behavior than the previous session; there is no live switching mid-session.
 
 To pin an exact model instead, set the tier's variable to the exact provider ID, for example `CODING_ROUTER_FAST_MODEL_CODEX=chatgpt-6-luna`. Exact IDs stay pinned and never trigger catalog discovery; setting every enabled tier to an exact ID bypasses discovery entirely. A disabled Long tier never triggers discovery, and its `astra:latest` default is only resolved if Long is enabled.
 

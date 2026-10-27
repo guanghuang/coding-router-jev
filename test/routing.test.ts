@@ -327,10 +327,12 @@ test("candidatesFor resolves latest alias tiers from the catalog with its metada
   const catalog = new Map([
     ["gpt-6.10-luna", { slug: "gpt-6.10-luna", display_name: "Luna", context_window: 200_000, default_reasoning_level: "medium", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }] }],
     ["gpt-6.9-sol", { slug: "gpt-6.9-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "high" }] }],
+    ["gpt-6.1-terra", { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }] }],
   ]);
   const result = candidatesFor(config, catalog as never);
   expect(result.find(c => c.tier === "fast")).toMatchObject({ id: "gpt-6.10-luna", capacity: { contextWindow: 200_000 }, defaultEffort: "medium" });
-  expect(result.find(c => c.tier === "balanced")!.id).toBe("gpt-6.9-sol");
+  expect(result.find(c => c.tier === "balanced")!.id).toBe("gpt-6.1-terra");
+  expect(result.find(c => c.tier === "strong")!.id).toBe("gpt-6.9-sol");
   expect(result.map(c => c.id)).not.toContain("luna:latest");
 });
 

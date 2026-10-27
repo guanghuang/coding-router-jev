@@ -36,6 +36,7 @@ test("proxy routes once per turn, keeps tool continuations, streams notices once
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     const body = await req.json() as CodexBody;
@@ -58,7 +59,7 @@ test("proxy routes once per turn, keeps tool continuations, streams notices once
     const duplicate = await Promise.all([send([first]), send([first])]);
     expect(inputs).toHaveLength(1);
     expect(duplicate.filter(output => output.includes("[Jev]")).length).toBe(1);
-    expect(captured[1].body.model).toBe("gpt-6.1-sol");
+    expect(captured[1].body.model).toBe("gpt-6.1-terra");
     expect(captured[0].auth).toBe("Bearer fake-auth");
     await send([first, { type: "function_call_output", call_id: "call", output: "done" }]);
     expect(inputs).toHaveLength(1);
@@ -71,8 +72,8 @@ test("proxy routes once per turn, keeps tool continuations, streams notices once
     expect(inputs[1].cache).not.toHaveProperty("model");
     expect(inputs[1].cache).not.toHaveProperty("last_response_model");
     const last = captured.at(-1)!.body;
-    expect(last.reasoning?.effort).toBe("low");
-    expect((last.input as Item[]).some(item => item.type === "configuration_update" && item.reasoning?.effort === "high")).toBe(true);
+    expect(last.reasoning?.effort).toBe("high");
+    expect((last.input as Item[]).some(item => item.type === "configuration_update" && item.reasoning?.effort === "high")).toBe(false);
     await send([first, second, { role: "user", content: "manual request" }], "manual-model");
     expect(inputs).toHaveLength(2);
     expect(captured.at(-1)!.body.model).toBe("manual-model");
@@ -112,6 +113,7 @@ test("custom feedback format with all placeholders verified through proxy", asyn
   let turnCount = 0;
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     const body = await req.json() as CodexBody;
@@ -143,6 +145,7 @@ test("malformed JEV usage fields render as unavailable in feedback", async () =>
   const notices: string[] = [];
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     const body = await req.json() as CodexBody;
@@ -248,6 +251,7 @@ test("jev notices are stripped from upstream history and fabricated lookalikes d
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     const body = await req.json() as CodexBody;
@@ -295,6 +299,7 @@ test("jev notices are stripped even with custom feedback format", async () => {
   const captured: { body: CodexBody }[] = [];
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     const body = await req.json() as CodexBody;
@@ -639,6 +644,7 @@ test("default startup tier is fast and first JEV input reflects configured fast 
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     forwarded = await req.json() as CodexBody;
@@ -664,6 +670,7 @@ test("custom startup tier strong is honored", async () => {
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     forwarded = await req.json() as CodexBody;
@@ -689,6 +696,7 @@ test("JEV failure falls back to configured startup tier rather than strong", asy
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     forwarded = await req.json() as CodexBody;
@@ -704,8 +712,8 @@ test("JEV failure falls back to configured startup tier rather than strong", asy
     await fetch(`http://127.0.0.1:${proxy.port}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: AUTO_MODEL, input: [{ role: "user", content: "test" }] }) }).then(r => r.text());
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("tier: balanced");
-    expect(notices[0]).toContain("model: gpt-6.1-sol");
-    expect(forwarded?.model).toBe("gpt-6.1-sol");
+    expect(notices[0]).toContain("model: gpt-6.1-terra");
+    expect(forwarded?.model).toBe("gpt-6.1-terra");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -714,6 +722,7 @@ test("restart resets to configured startup tier, not previous session final tier
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     const body = await req.json() as CodexBody;
@@ -751,6 +760,7 @@ test("startup model uses catalog alias resolution with custom fast model", async
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna-v2", display_name: "Luna v2", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     forwarded = await req.json() as CodexBody;
@@ -777,6 +787,7 @@ test("startup model resolves chatgpt-6 alias to catalog gpt-6 slug", async () =>
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     forwarded = await req.json() as CodexBody;
@@ -801,6 +812,7 @@ test("explicit model requests remain untouched with startup tier configured", as
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [
       { slug: "gpt-6-luna", display_name: "Luna", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
+      { slug: "gpt-6.1-terra", display_name: "Terra", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
       { slug: "gpt-6.1-sol", display_name: "Sol", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }] },
     ] });
     const body = await req.json() as CodexBody;
@@ -900,7 +912,7 @@ const aliasModel = (slug: string) => ({ slug, display_name: slug, context_window
 
 test("latest aliases resolve from a prior /models catalog, stay pinned across refresh, and appear in feedback/JSONL", async () => {
   const directory = await mkdtemp(join(tmpdir(), "codex-jev-latest-pin-"));
-  let catalogModels = [aliasModel("gpt-6.9-luna"), aliasModel("gpt-6.10-sol")];
+  let catalogModels = [aliasModel("gpt-6.9-luna"), aliasModel("gpt-6.10-sol"), aliasModel("gpt-6.1-terra")];
   const captured: CodexBody[] = [];
   const inputs: RoutingInput[] = [];
   const notices: string[] = [];
@@ -920,20 +932,20 @@ test("latest aliases resolve from a prior /models catalog, stay pinned across re
     await fetch(`${local}/models`).then(r => r.json());
     await send("hello");
     expect(inputs).toHaveLength(1);
-    expect(inputs[0].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.10-sol", "gpt-6.10-sol"]);
-    expect(captured[0].model).toBe("gpt-6.10-sol");
+    expect(inputs[0].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.1-terra", "gpt-6.10-sol"]);
+    expect(captured[0].model).toBe("gpt-6.1-terra");
     expect(JSON.stringify(captured)).not.toContain(":latest");
-    expect(notices[0]).toContain("model: gpt-6.10-sol");
+    expect(notices[0]).toContain("model: gpt-6.1-terra");
     // A catalog refresh advertising newer versions must not switch the session.
-    catalogModels = [aliasModel("gpt-6.10-luna"), aliasModel("gpt-6.11-sol")];
+    catalogModels = [aliasModel("gpt-6.10-luna"), aliasModel("gpt-6.11-sol"), aliasModel("gpt-6.2-terra")];
     await fetch(`${local}/models`).then(r => r.json());
     const first: Item = { role: "user", content: "hello" };
     await send("again", [first, { role: "assistant", content: "answer" }]);
     expect(inputs).toHaveLength(2);
-    expect(inputs[1].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.10-sol", "gpt-6.10-sol"]);
-    expect(captured.at(-1)!.model).toBe("gpt-6.10-sol");
+    expect(inputs[1].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.1-terra", "gpt-6.10-sol"]);
+    expect(captured.at(-1)!.model).toBe("gpt-6.1-terra");
     const records = (await readFile(proxy.logPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-    expect(records.map(record => record.decision.model)).toEqual(["gpt-6.10-sol", "gpt-6.10-sol"]);
+    expect(records.map(record => record.decision.model)).toEqual(["gpt-6.1-terra", "gpt-6.1-terra"]);
     expect(JSON.stringify(records)).not.toContain(":latest");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
@@ -941,7 +953,7 @@ test("latest aliases resolve from a prior /models catalog, stay pinned across re
 test("unset Codex defaults resolve latest families once, stay pinned, and appear in feedback/JSONL", async () => {
   const directory = await mkdtemp(join(tmpdir(), "codex-jev-latest-defaults-"));
   let modelsHits = 0;
-  let catalogModels = [aliasModel("gpt-6.9-luna"), aliasModel("gpt-6.10-sol")];
+  let catalogModels = [aliasModel("gpt-6.9-luna"), aliasModel("gpt-6.10-sol"), aliasModel("gpt-6.1-terra")];
   const captured: CodexBody[] = [];
   const inputs: RoutingInput[] = [];
   const notices: string[] = [];
@@ -960,20 +972,20 @@ test("unset Codex defaults resolve latest families once, stay pinned, and appear
     await send("hello");
     expect(modelsHits).toBe(1);
     expect(inputs).toHaveLength(1);
-    expect(inputs[0].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.10-sol", "gpt-6.10-sol"]);
-    expect(captured[0].model).toBe("gpt-6.10-sol");
-    expect(notices[0]).toContain("model: gpt-6.10-sol");
+    expect(inputs[0].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.1-terra", "gpt-6.10-sol"]);
+    expect(captured[0].model).toBe("gpt-6.1-terra");
+    expect(notices[0]).toContain("model: gpt-6.1-terra");
     // A newer catalog must not switch the session: no second discovery, same exact IDs.
-    catalogModels = [aliasModel("gpt-6.10-luna"), aliasModel("gpt-6.11-sol")];
+    catalogModels = [aliasModel("gpt-6.10-luna"), aliasModel("gpt-6.11-sol"), aliasModel("gpt-6.2-terra")];
     const first: Item = { role: "user", content: "hello" };
     await send("again", [first, { role: "assistant", content: "answer" }]);
     expect(modelsHits).toBe(1);
     expect(inputs).toHaveLength(2);
-    expect(inputs[1].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.10-sol", "gpt-6.10-sol"]);
-    expect(captured.at(-1)!.model).toBe("gpt-6.10-sol");
+    expect(inputs[1].candidates.map(c => c.id)).toEqual(["gpt-6.9-luna", "gpt-6.1-terra", "gpt-6.10-sol"]);
+    expect(captured.at(-1)!.model).toBe("gpt-6.1-terra");
     expect(JSON.stringify(captured)).not.toContain(":latest");
     const records = (await readFile(proxy.logPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-    expect(records.map(record => record.decision.model)).toEqual(["gpt-6.10-sol", "gpt-6.10-sol"]);
+    expect(records.map(record => record.decision.model)).toEqual(["gpt-6.1-terra", "gpt-6.1-terra"]);
     expect(JSON.stringify(records)).not.toContain(":latest");
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
 });
@@ -1377,7 +1389,7 @@ test("an enabled Long latest alias resolves and can be selected", async () => {
   const captured: CodexBody[] = [];
   const inputs: RoutingInput[] = [];
   const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
-    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [aliasModel("gpt-6.10-luna"), aliasModel("gpt-6.10-sol"), aliasModel("gpt-6.10-astra")] });
+    if (new URL(req.url).pathname.endsWith("/models")) return Response.json({ models: [aliasModel("gpt-6.10-luna"), aliasModel("gpt-6.10-sol"), aliasModel("gpt-6.1-terra"), aliasModel("gpt-6.10-astra")] });
     const body = await req.json() as CodexBody;
     captured.push(body);
     return Response.json({ model: body.model, usage: { input_tokens_details: { cached_tokens: 0 } } });

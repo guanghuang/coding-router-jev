@@ -59,7 +59,7 @@ export function configFromEnv(environment: Record<string, string | undefined> = 
   return {
     codexModels: {
       fast: value(CODEX_MODEL_ENV_KEYS.fast, "luna:latest"),
-      balanced: value(CODEX_MODEL_ENV_KEYS.balanced, "sol:latest"),
+      balanced: value(CODEX_MODEL_ENV_KEYS.balanced, "terra:latest"),
       strong: value(CODEX_MODEL_ENV_KEYS.strong, "sol:latest"),
       long: value(CODEX_MODEL_ENV_KEYS.long, "astra:latest"),
     },

@@ -4,12 +4,12 @@ import { CodexLatestResolutionError, compareVersionTuples, extractCatalogEntries
 const entry = (slug: string, extra: Record<string, unknown> = {}) => ({ slug, display_name: slug, supported_reasoning_levels: [{ effort: "low" }], ...extra });
 
 describe("latest alias parsing", () => {
-  test("recognizes only the three documented family aliases", () => {
+  test("recognizes only the four documented family aliases", () => {
     expect(parseLatestAlias("luna:latest")).toBe("luna");
     expect(parseLatestAlias(" Sol:latest ")).toBe("sol");
     expect(parseLatestAlias("ASTRA:LATEST")).toBe("astra");
     expect(parseLatestAlias("gpt-6-luna")).toBeNull();
-    expect(parseLatestAlias("terra:latest")).toBeNull();
+    expect(parseLatestAlias("terra:latest")).toBe("terra");
     expect(parseLatestAlias("luna:6.10")).toBeNull();
     expect(isLatestAlias("sol:latest")).toBe(true);
     expect(isLatestAlias("chatgpt-6.1-sol")).toBe(false);
@@ -33,6 +33,10 @@ describe("resolveLatestFamily", () => {
     expect(resolveLatestFamily("luna", catalog)).toBe("gpt-6.10-luna");
     expect(resolveLatestFamily("sol", catalog)).toBe("gpt-6.9-sol");
     expect(resolveLatestFamily("astra", catalog)).toBe("chatgpt-6.11-astra");
+  });
+
+  test("resolves Terra versions without crossing model families", () => {
+    expect(resolveLatestFamily("terra", [entry("gpt-6-terra"), entry("gpt-6.1-terra"), entry("gpt-6.2-sol")])).toBe("gpt-6.1-terra");
   });
 
   test("response order does not decide the winner", () => {

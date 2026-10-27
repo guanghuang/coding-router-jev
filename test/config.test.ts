@@ -9,7 +9,7 @@ describe("configuration", () => {
     expect(configFromEnv({})).toEqual({
       codexModels: {
         fast: "luna:latest",
-        balanced: "sol:latest",
+        balanced: "terra:latest",
         strong: "sol:latest",
         long: "astra:latest",
       },
@@ -47,7 +47,7 @@ describe("configuration", () => {
     });
     expect(config.codexModels).toEqual({
       fast: "luna:latest",
-      balanced: "sol:latest",
+      balanced: "terra:latest",
       strong: "sol:latest",
       long: "astra:latest",
     });
@@ -78,11 +78,11 @@ describe("configuration", () => {
     });
   });
 
-  test("balanced and strong share the sol:latest default while remaining distinct tiers", () => {
+  test("balanced defaults to Terra and strong defaults to Sol", () => {
     const config = configFromEnv({});
-    expect(config.codexModels.balanced).toBe("sol:latest");
+    expect(config.codexModels.balanced).toBe("terra:latest");
     expect(config.codexModels.strong).toBe("sol:latest");
-    expect(config.codexModels.balanced).toBe(config.codexModels.strong);
+    expect(config.codexModels.balanced).not.toBe(config.codexModels.strong);
   });
 
   test("parses env lines and strips quotes/comments", () => {
