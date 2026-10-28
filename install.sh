@@ -23,6 +23,7 @@ REPO="guanghuang/coding-router-jev"
 BINARY_NAME="codex-jev"
 CLAUDE_BINARY_NAME="claude-jev"
 JEV_LOGS_BINARY_NAME="jev-logs"
+INSTALL_ONLY=""
 
 # Guard against unset HOME early with a clear message.
 if [ -z "${HOME:-}" ]; then
@@ -61,6 +62,10 @@ parse_args() {
         INSTALL_DIR="${1#--dir=}"
         [ -n "$INSTALL_DIR" ] || die "--dir requires a non-empty value"
         shift ;;
+      --only)
+        [ $# -ge 2 ] || die "--only requires a binary name"
+        case "$2" in codex-jev|claude-jev|jev-logs) INSTALL_ONLY="$INSTALL_ONLY $2" ;; *) die "unknown binary: $2" ;; esac
+        shift 2 ;;
       --help|-h)
         show_help; exit 0 ;;
       *)
@@ -77,6 +82,7 @@ Usage:
   install.sh [OPTIONS]
 
 Options:
+  --only NAME         Install a selected binary (repeat for multiple; default: all)
   --version VERSION   Install a specific release (e.g. v0.1.0)
   --dir DIRECTORY     Install directory (default: ~/.local/bin)
                       Use an absolute path or $HOME; ~ is not expanded.
@@ -266,6 +272,10 @@ The downloaded file may be corrupted or tampered with."
 
 # ── Install ──────────────────────────────────────────────────────────────────
 
+selected() {
+  [ -z "$INSTALL_ONLY" ] || case " $INSTALL_ONLY " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
 install_binary() {
   _src="$1"
   _dest_dir="$2"
@@ -338,23 +348,23 @@ main() {
   detect_platform
   resolve_version
 
-  download_asset "$ASSET_NAME" "${TMPDIR_INSTALL}/${ASSET_NAME}"
-  download_asset "$CLAUDE_ASSET_NAME" "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}"
-  download_asset "$JEV_LOGS_ASSET_NAME" "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}"
+  selected "$BINARY_NAME" && download_asset "$ASSET_NAME" "${TMPDIR_INSTALL}/${ASSET_NAME}"
+  selected "$CLAUDE_BINARY_NAME" && download_asset "$CLAUDE_ASSET_NAME" "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}"
+  selected "$JEV_LOGS_BINARY_NAME" && download_asset "$JEV_LOGS_ASSET_NAME" "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}"
   download_asset "SHA256SUMS" "${TMPDIR_INSTALL}/SHA256SUMS"
 
-  verify_checksum "${TMPDIR_INSTALL}/${ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
-  verify_checksum "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
-  verify_checksum "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
+  selected "$BINARY_NAME" && verify_checksum "${TMPDIR_INSTALL}/${ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
+  selected "$CLAUDE_BINARY_NAME" && verify_checksum "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
+  selected "$JEV_LOGS_BINARY_NAME" && verify_checksum "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
 
-  install_binary "${TMPDIR_INSTALL}/${ASSET_NAME}" "$INSTALL_DIR" "$BINARY_NAME"
-  install_binary "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "$INSTALL_DIR" "$CLAUDE_BINARY_NAME"
-  install_binary "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "$INSTALL_DIR" "$JEV_LOGS_BINARY_NAME"
+  selected "$BINARY_NAME" && install_binary "${TMPDIR_INSTALL}/${ASSET_NAME}" "$INSTALL_DIR" "$BINARY_NAME"
+  selected "$CLAUDE_BINARY_NAME" && install_binary "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "$INSTALL_DIR" "$CLAUDE_BINARY_NAME"
+  selected "$JEV_LOGS_BINARY_NAME" && install_binary "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "$INSTALL_DIR" "$JEV_LOGS_BINARY_NAME"
 
   print_path_help "$INSTALL_DIR"
 
   log ""
-  log "Done! Run '${BINARY_NAME} --help' or '${CLAUDE_BINARY_NAME} --help' to get started."
+  log "Done! Installed:${INSTALL_ONLY:- codex-jev claude-jev jev-logs}"
   log ""
   log "Prerequisites:"
   log "  codex-jev requires the Codex CLI (codex) installed and authenticated separately."
@@ -362,7 +372,10 @@ main() {
   log "  See https://github.com/openai/codex and https://code.claude.com for installation."
   log ""
   log "Uninstall:"
-  log "  rm '${INSTALL_DIR}/${BINARY_NAME}' '${INSTALL_DIR}/${CLAUDE_BINARY_NAME}' '${INSTALL_DIR}/${JEV_LOGS_BINARY_NAME}'"
+  selected "$BINARY_NAME" && log "  rm '${INSTALL_DIR}/${BINARY_NAME}'"
+  selected "$CLAUDE_BINARY_NAME" && log "  rm '${INSTALL_DIR}/${CLAUDE_BINARY_NAME}'"
+  selected "$JEV_LOGS_BINARY_NAME" && log "  rm '${INSTALL_DIR}/${JEV_LOGS_BINARY_NAME}'"
+  return 0
 }
 
 main "$@"

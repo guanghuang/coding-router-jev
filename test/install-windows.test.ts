@@ -62,7 +62,7 @@ function startFixtureServer(
 async function runInstallerWithServer(
   server: FixtureServer,
   installDir: string,
-  opts?: { token?: string; version?: string; failArch?: string; envVersion?: string },
+  opts?: { token?: string; version?: string; failArch?: string; envVersion?: string; only?: string },
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const baseUrl = `http://localhost:${server.port}`;
   const script = await readFile(INSTALL_SCRIPT, "utf8");
@@ -102,6 +102,7 @@ async function runInstallerWithServer(
     args.push("-Version", opts.version);
   }
 
+  if (opts?.only) args.push("-Only", opts.only);
   args.push("-Dir", installDir);
 
   const env: Record<string, string> = {
@@ -434,6 +435,21 @@ describe("install.ps1", () => {
       const info = await stat(join(installDir, "codex-jev.exe"));
       expect(info.size).toBeGreaterThan(0);
     });
+  });
+
+  test("-Only installs just the requested binary", async () => {
+    if (!pwshAvailable) return;
+    const server = startFixtureServer(FIXTURES);
+    const dir = join(tempDir, "selected-windows");
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "claude-jev.exe"), "existing");
+      const result = await runInstallerWithServer(server, dir, { only: "codex-jev", version: "v0.1.0" });
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(join(dir, "claude-jev.exe"), "utf8")).toBe("existing");
+      expect(await stat(join(dir, "codex-jev.exe"))).toBeDefined();
+      expect(result.stdout).not.toContain("Downloading claude-jev-");
+    } finally { server.stop(); }
   });
 
   describe("version pinning", () => {

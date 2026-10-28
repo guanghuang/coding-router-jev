@@ -96,6 +96,14 @@ curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/i
 
 Prefer [download and review](#download-and-review-before-executing-macoslinux) or pin a release tag instead of piping `main` blindly.
 
+To install only Codex, pass the selection to the installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh -s -- --only codex-jev
+```
+
+Use `--only claude-jev --only jev-logs` to select multiple binaries. Unselected existing binaries are left untouched. Pi is installed separately as an extension.
+
 #### Download and review before executing (macOS/Linux)
 
 ```sh
@@ -108,6 +116,7 @@ sh install.sh        # run after review
 
 | Flag | Environment variable | Description |
 |------|---------------------|-------------|
+| `--only NAME` | — | Install only the named binary; repeat for multiple selections. |
 | `--version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `--dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `~/.local/bin`). Use an absolute path; `~` is not expanded. |
 | `--help` | — | Show usage |
@@ -164,6 +173,7 @@ Get-Content install.ps1   # review the script
 
 | Flag | Environment variable | Description |
 |------|---------------------|-------------|
+| `-Only NAME` | — | Install selected binaries, e.g. `-Only codex-jev` or `-Only claude-jev,jev-logs`. |
 | `-Version VERSION` | `CODEX_JEV_VERSION` | Pin a specific release tag (e.g. `v0.1.0`) |
 | `-Dir DIRECTORY` | `INSTALL_DIR` | Override install directory (default: `$env:LOCALAPPDATA\coding-router-jev\bin`) |
 | `-Help` | — | Show usage |

@@ -39,6 +39,8 @@
 param(
     [string]$Version = '',
     [string]$Dir = '',
+    [ValidateSet('codex-jev', 'claude-jev', 'jev-logs')]
+    [string[]]$Only = @(),
     [switch]$Help
 )
 
@@ -74,6 +76,7 @@ Usage:
   install.ps1 [OPTIONS]
 
 Options:
+  -Only NAME [...]   Install selected binaries (default: all)
   -Version VERSION   Install a specific release (e.g. v0.1.0)
   -Dir DIRECTORY     Install directory
                      Default: `$env:LOCALAPPDATA\coding-router-jev\bin
@@ -444,30 +447,36 @@ function Main {
     try {
         $tag = Resolve-ReleaseVersion -PinnedVersion $Version
 
-        $assetDest = Join-Path $Script:TempDir $Script:AssetName
-        Get-ReleaseAsset -Tag $tag -AssetName $Script:AssetName -Destination $assetDest
+        if ($Only.Count -eq 0 -or $Only -contains $Script:BinaryName) {
+            $assetDest = Join-Path $Script:TempDir $Script:AssetName
+            Get-ReleaseAsset -Tag $tag -AssetName $Script:AssetName -Destination $assetDest
+        }
 
-        $claudeAssetDest = Join-Path $Script:TempDir $Script:ClaudeAssetName
-        Get-ReleaseAsset -Tag $tag -AssetName $Script:ClaudeAssetName -Destination $claudeAssetDest
+        if ($Only.Count -eq 0 -or $Only -contains $Script:ClaudeBinaryName) {
+            $claudeAssetDest = Join-Path $Script:TempDir $Script:ClaudeAssetName
+            Get-ReleaseAsset -Tag $tag -AssetName $Script:ClaudeAssetName -Destination $claudeAssetDest
+        }
 
-        $jevLogsAssetDest = Join-Path $Script:TempDir $Script:JevLogsAssetName
-        Get-ReleaseAsset -Tag $tag -AssetName $Script:JevLogsAssetName -Destination $jevLogsAssetDest
+        if ($Only.Count -eq 0 -or $Only -contains $Script:JevLogsBinaryName) {
+            $jevLogsAssetDest = Join-Path $Script:TempDir $Script:JevLogsAssetName
+            Get-ReleaseAsset -Tag $tag -AssetName $Script:JevLogsAssetName -Destination $jevLogsAssetDest
+        }
 
         $sumsDest = Join-Path $Script:TempDir 'SHA256SUMS'
         Get-ReleaseAsset -Tag $tag -AssetName 'SHA256SUMS' -Destination $sumsDest
 
-        Test-Checksum -FilePath $assetDest -SumsFilePath $sumsDest
-        Test-Checksum -FilePath $claudeAssetDest -SumsFilePath $sumsDest
-        Test-Checksum -FilePath $jevLogsAssetDest -SumsFilePath $sumsDest
+        if ($Only.Count -eq 0 -or $Only -contains $Script:BinaryName) { Test-Checksum -FilePath $assetDest -SumsFilePath $sumsDest }
+        if ($Only.Count -eq 0 -or $Only -contains $Script:ClaudeBinaryName) { Test-Checksum -FilePath $claudeAssetDest -SumsFilePath $sumsDest }
+        if ($Only.Count -eq 0 -or $Only -contains $Script:JevLogsBinaryName) { Test-Checksum -FilePath $jevLogsAssetDest -SumsFilePath $sumsDest }
 
-        Install-Binary -Source $assetDest -DestDir $installDir -Name $Script:BinaryName
-        Install-Binary -Source $claudeAssetDest -DestDir $installDir -Name $Script:ClaudeBinaryName
-        Install-Binary -Source $jevLogsAssetDest -DestDir $installDir -Name $Script:JevLogsBinaryName
+        if ($Only.Count -eq 0 -or $Only -contains $Script:BinaryName) { Install-Binary -Source $assetDest -DestDir $installDir -Name $Script:BinaryName }
+        if ($Only.Count -eq 0 -or $Only -contains $Script:ClaudeBinaryName) { Install-Binary -Source $claudeAssetDest -DestDir $installDir -Name $Script:ClaudeBinaryName }
+        if ($Only.Count -eq 0 -or $Only -contains $Script:JevLogsBinaryName) { Install-Binary -Source $jevLogsAssetDest -DestDir $installDir -Name $Script:JevLogsBinaryName }
 
         Update-UserPath -InstallDir $installDir
 
         Write-Log ""
-        Write-Log "Done! Run '$Script:BinaryName --help' or '$Script:ClaudeBinaryName --help' to get started."
+        Write-Log "Done! Installation complete."
         Write-Log ""
         Write-Log "Prerequisites:"
         Write-Log "  codex-jev requires the Codex CLI (codex) installed and authenticated separately."
@@ -475,9 +484,15 @@ function Main {
         Write-Log "  See https://github.com/openai/codex and https://code.claude.com for installation."
         Write-Log ""
         Write-Log "Uninstall:"
+        if ($Only.Count -eq 0 -or $Only -contains $Script:BinaryName) {
         Write-Log "  Remove-Item '$(Join-Path $installDir "$Script:BinaryName.exe")'"
+        }
+        if ($Only.Count -eq 0 -or $Only -contains $Script:ClaudeBinaryName) {
         Write-Log "  Remove-Item '$(Join-Path $installDir "$Script:ClaudeBinaryName.exe")'"
+        }
+        if ($Only.Count -eq 0 -or $Only -contains $Script:JevLogsBinaryName) {
         Write-Log "  Remove-Item '$(Join-Path $installDir "$Script:JevLogsBinaryName.exe")'"
+        }
     }
     finally {
         Remove-TempDir

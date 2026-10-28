@@ -83,7 +83,7 @@ async function runInstaller(
 async function runInstallerWithServer(
   server: FixtureServer,
   installDir: string,
-  opts?: { token?: string; version?: string; home?: string },
+  opts?: { token?: string; version?: string; home?: string; only?: string[] },
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const baseUrl = `http://localhost:${server.port}`;
   const script = await readFile(INSTALL_SCRIPT, "utf8");
@@ -116,6 +116,8 @@ async function runInstallerWithServer(
   if (opts?.version) {
     args.push("--version", opts.version);
   }
+
+  for (const name of opts?.only ?? []) args.push("--only", name);
 
   const proc = Bun.spawn(["sh", patchedScript, ...args], {
     env,
@@ -408,6 +410,21 @@ describe("install.sh", () => {
       const after = await readFile(configPath, "utf8");
       expect(after).toBe(configContent);
     });
+  });
+
+  test("selectively installs requested binaries and preserves others", async () => {
+    const server = startFixtureServer(FIXTURES);
+    const dir = join(tempDir, "selected");
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "claude-jev"), "existing");
+      const result = await runInstallerWithServer(server, dir, { only: ["codex-jev", "jev-logs"], version: "v0.1.0" });
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(join(dir, "claude-jev"), "utf8")).toBe("existing");
+      expect(await stat(join(dir, "codex-jev"))).toBeDefined();
+      expect(await stat(join(dir, "jev-logs"))).toBeDefined();
+      expect(result.stdout).not.toContain("Downloading claude-jev-");
+    } finally { server.stop(); }
   });
 
   describe("version pinning", () => {
