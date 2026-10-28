@@ -71,7 +71,7 @@ Before changing repository visibility:
 - Scan the complete Git history for credentials and private data, not just the current files. Rotate any exposed credentials before publishing; deleting a file does not remove its history.
 - Review issues, pull requests, Actions logs/artifacts, and release assets for confidential content. These may become publicly accessible along with the code.
 - Keep `.env` files and session JSONL logs out of commits and bug reports. Retain the included MIT license and upstream attribution.
-- Commit the intended release changes, let CI pass, and publish a version tag matching `package.json` (currently `v0.1.0`). The release workflow builds binaries and checksums on `v*` tag pushes; a manual workflow run only builds artifacts.
+- Commit the intended release changes, let CI pass, and publish a version tag matching `package.json`. The release workflow builds binaries and checksums on `v*` tag pushes; a manual workflow run only builds artifacts.
 - Once the repository and release are public, test both installer commands without `GH_TOKEN` and verify the Pi package installation from the release tag.
 
 `"private": true` in `package.json` can stay: GitHub visibility and binary releases do not require npm publication.
