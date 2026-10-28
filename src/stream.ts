@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { extractUsage, type TokenUsage } from "./telemetry";
 
 export type Usage = { model: string; read: number | null; created: number | null; responseId?: string };
 function usageOf(response: Record<string, unknown>, fallback: string): Usage {
@@ -15,13 +16,18 @@ function noticeEvents(text: string): string {
     { type: "response.output_item.done", item },
   ].map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
 }
-export function observeStream(source: ReadableStream<Uint8Array>, model: string, notice: (() => string | undefined) | undefined, onUsage: (usage: Usage) => void): ReadableStream<Uint8Array> {
+export function observeStream(source: ReadableStream<Uint8Array>, model: string, notice: (() => string | undefined) | undefined, onUsage: (usage: Usage) => void, onTelemetry?: (status: string, usage: TokenUsage | null, reportedModel?: unknown) => void, onConflict?: () => void): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   let pending = "";
   let overflow = false;
   let completed: Usage | undefined;
   let notified = false;
   let prefix = Buffer.alloc(0);
+  let terminal: { status: string; usage: TokenUsage | null; reportedModel: unknown } | undefined;
+  let terminalResponseId: string | undefined;
+  let conflict = false;
+  let reported = false;
+  let conflictReported = false;
   return source.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       if (!notified) {
@@ -51,9 +57,22 @@ export function observeStream(source: ReadableStream<Uint8Array>, model: string,
         try {
           const event = JSON.parse(data);
           if (event.type === "response.completed" && event.response?.status !== "failed") completed = usageOf(event.response, model);
+          if (["response.completed", "response.failed", "response.incomplete"].includes(event.type)) {
+            const next = { status: event.type === "response.completed" && event.response?.status !== "failed" ? "completed" : event.type === "response.incomplete" ? "incomplete" : "failed", usage: extractUsage(event.response), reportedModel: event.response?.model };
+            if (terminal && JSON.stringify(terminal) !== JSON.stringify(next)) conflict = true;
+            const responseId = typeof event.response?.id === "string" ? event.response.id : undefined;
+            if (terminalResponseId && responseId && terminalResponseId !== responseId) conflict = true;
+            terminalResponseId ??= responseId;
+            terminal = next;
+          }
         } catch {}
       }
+      if (conflict && reported && !conflictReported) { conflictReported = true; onConflict?.(); }
+      if (terminal && !reported) {
+        reported = true;
+        onTelemetry?.(conflict ? "conflicting_terminal_events" : terminal.status, conflict ? null : terminal.usage, conflict ? undefined : terminal.reportedModel);
+      }
     },
-    flush(controller) { if (prefix.length) controller.enqueue(prefix); onUsage(completed ?? { model, read: null, created: null }); },
+    flush(controller) { if (prefix.length) controller.enqueue(prefix); onUsage(completed ?? { model, read: null, created: null }); if (!reported) onTelemetry?.("incomplete", null); },
   }));
 }

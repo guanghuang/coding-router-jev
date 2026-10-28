@@ -8,6 +8,7 @@ import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult, type SensitivityAnswers } from "./router";
 import { observeStream, type Usage } from "./stream";
+import { createTelemetry, extractUsage } from "./telemetry";
 import { TIERS, type Candidate, type CodexBody, type Tier } from "./types";
 
 export const AUTO_MODEL = VIRTUAL_MODEL_ID;
@@ -36,7 +37,7 @@ export function summarizeCacheRun(observations: ResponseObservation[], currentMo
   }
   return result;
 }
-type State = { tier: Tier; model: string; effort: EffortState; lastTurn?: string; notice?: string; noticeKey?: string; observations: ResponseObservation[]; last?: Usage & { at: number } };
+type State = { tier: Tier; model: string; effort: EffortState; lastTurn?: string; decisionId?: string; notice?: string; noticeKey?: string; observations: ResponseObservation[]; last?: Usage & { at: number } };
 export function candidatesFor(config: Config, catalog: Map<string, CatalogModel>, resolvedAliases?: ReadonlyMap<CodexLatestFamily, string>): Candidate[] {
   return TIERS.filter(tier => tier !== "long" || config.longModelEnabled).map(tier => {
     const configured = config.codexModels[tier];
@@ -81,11 +82,12 @@ export const codexArgs = (baseURL: string, args: string[]) => [
   ...args,
 ];
 
-export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void } = {}) {
+export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void; telemetryPath?: string } = {}) {
   const route = options.route ?? createRouter();
   const logDir = options.logDirectory ?? DEFAULT_LOG_DIR;
   if (config.logRetentionDays !== undefined) cleanupStaleLogs(logDir, config.logRetentionDays);
   const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, logDir);
+  const telemetry = createTelemetry(options.telemetryPath ?? process.env.JEV_TELEMETRY_FILE);
   const catalog = new Map<string, CatalogModel>();
   const states = new Map<string, State>();
   const locks = new Map<string, Promise<unknown>>();
@@ -295,7 +297,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         state.tier = match?.tier ?? state.tier;
         state.effort = { base: body.reasoning?.effort, effort: body.reasoning?.effort, updates: [] };
         if (Array.isArray(body.input)) body.input = body.input.filter(item => !isJevNotice(item));
-        return { key, state, notice: undefined as string | undefined, noticeKey: undefined as string | undefined };
+        return { key, state, decisionId: undefined as string | undefined, notice: undefined as string | undefined, noticeKey: undefined as string | undefined };
       }
       const turn = compact ? undefined : newTurn(body);
       const turnKey = turn && (body.previous_response_id ? hash(`${body.previous_response_id}|${turn.anchor}`) : turn.anchor);
@@ -325,8 +327,10 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         const preserved = applyEffort(body, state.effort, selected.id, effort, turn.anchor);
         state.lastTurn = turnKey;
         const id = randomUUID();
+        state.decisionId = id;
         noticeKey = `${key}:${turnKey}`;
         const jevUsage = result.response?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+        telemetry.decision(id, jevUsage?.input_tokens, jevUsage?.output_tokens);
         const feedbackValues: FeedbackValues = {
           tier: selected.tier, model: selected.id, effort, decision: decisionLabel(decision.reason), confidence,
           previous_model: currentModel, cache_read: last?.read ?? null, cache_write: last?.created ?? null,
@@ -345,7 +349,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
       }
       body.model = state.model;
       if (Array.isArray(body.input)) body.input = body.input.filter(item => !isJevNotice(item));
-      return { key, state, notice, noticeKey };
+      return { key, state, decisionId: state.decisionId, notice, noticeKey };
     });
     locks.set(key, job);
     try { return await job; } finally { if (locks.get(key) === job) locks.delete(key); }
@@ -353,6 +357,11 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
   const server = Bun.serve({
     hostname: "127.0.0.1", port: 0, idleTimeout: 0,
     async fetch(request) {
+      let telemetryRequest: string | undefined;
+      let telemetryFinished = false;
+      const finishTelemetry = (status: string, usage: ReturnType<typeof extractUsage> = null, reportedModel?: unknown) => {
+        if (telemetryRequest && !telemetryFinished) { telemetryFinished = true; telemetry.finish(telemetryRequest, status, usage, reportedModel); }
+      };
       try {
         const url = new URL(request.url);
         const path = url.pathname.replace(/^\/v1(?=\/)/, "");
@@ -362,12 +371,19 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         let payload = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
         let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
         let body: CodexBody | undefined;
+        let routingMode = "unknown";
         if (request.method === "POST" && /\/responses(?:\/compact)?$/.test(path)) {
           try { body = JSON.parse(new TextDecoder().decode(payload)); } catch { return Response.json({ error: { message: "Invalid JSON request" } }, { status: 400 }); }
           if (body && typeof body.model === "string") {
+            routingMode = body.model === AUTO_MODEL ? "automatic" : "explicit_model";
             prepared = await prepare(body, headers, path.endsWith("/compact"), request.signal);
             payload = new TextEncoder().encode(JSON.stringify(body)).buffer as ArrayBuffer;
           }
+        }
+        if (prepared && telemetry.enabled) {
+          const lastInput = Array.isArray(body?.input) ? body.input.at(-1) : undefined;
+          const requestKind = path.endsWith("/compact") ? "compact" : lastInput && ["function_call_output", "custom_tool_call_output"].includes(lastInput.type ?? "") ? "tool_continuation" : "other";
+          telemetryRequest = telemetry.start(body?.model, body?.reasoning?.effort, prepared.decisionId, requestKind, routingMode);
         }
         const response = await fetch(`${base.replace(/\/$/, "")}${path}${url.search}`, { method: request.method, headers, body: payload, signal: request.signal, redirect: "manual" });
         const responseHeaders = new Headers(response.headers);
@@ -387,7 +403,10 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
           }
           return Response.json(data, { status: response.status, headers: responseHeaders });
         }
-        if (!prepared || !response.ok || !response.body || path.endsWith("/compact")) return new Response(response.body, { status: response.status, headers: responseHeaders });
+        if (!prepared || !response.ok || !response.body || path.endsWith("/compact")) {
+          finishTelemetry(!response.ok ? "http_failure" : "unobserved");
+          return new Response(response.body, { status: response.status, headers: responseHeaders });
+        }
         const { state, notice, noticeKey } = prepared;
         const turnId = state.lastTurn;
         const usage = (value: Usage) => {
@@ -414,7 +433,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
             if (announced.size > 1000) announced.delete(announced.values().next().value!);
             return notice;
           } : undefined;
-          return new Response(observeStream(response.body, body!.model, getNotice, usage), { status: response.status, headers: responseHeaders });
+          return new Response(observeStream(response.body, body!.model, getNotice, usage, finishTelemetry, () => { if (telemetryRequest) telemetry.conflict(telemetryRequest); }), { status: response.status, headers: responseHeaders });
         }
         if (response.headers.get("content-type")?.includes("application/json")) {
           const data = await response.arrayBuffer();
@@ -422,11 +441,14 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
             const parsed = JSON.parse(new TextDecoder().decode(data));
             const details = parsed.usage?.input_tokens_details;
             usage({ model: parsed.model ?? body!.model, read: details?.cached_tokens ?? null, created: details?.cache_write_tokens ?? null, responseId: parsed.id });
-          } catch {}
+            finishTelemetry(parsed.status === "completed" ? "completed" : parsed.status === "failed" ? "failed" : "unobserved", extractUsage(parsed), parsed.model);
+          } catch { finishTelemetry("unobserved"); }
           return new Response(data, { status: response.status, headers: responseHeaders });
         }
+        finishTelemetry("unobserved");
         return new Response(response.body, { status: response.status, headers: responseHeaders });
       } catch (error) {
+        finishTelemetry("request_failed");
         return Response.json({ error: { type: "proxy_error", message: error instanceof Error ? error.message : "Upstream request failed" } }, { status: 502 });
       }
     },
