@@ -7,7 +7,7 @@ import { DEFAULT_STATUS_FORMAT, formatFeedback, type FeedbackValues } from "./fe
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult, type SensitivityAnswers } from "./router";
-import { observeStream, type Usage } from "./stream";
+import { filterFeedbackEcho, observeStream, type Usage } from "./stream";
 import { TIERS, type Candidate, type CodexBody, type Tier } from "./types";
 
 export const AUTO_MODEL = VIRTUAL_MODEL_ID;
@@ -414,7 +414,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
             if (announced.size > 1000) announced.delete(announced.values().next().value!);
             return notice;
           } : undefined;
-          return new Response(observeStream(response.body, body!.model, getNotice, usage), { status: response.status, headers: responseHeaders });
+          return new Response(observeStream(filterFeedbackEcho(response.body, config.feedbackFormat), body!.model, getNotice, usage), { status: response.status, headers: responseHeaders });
         }
         if (response.headers.get("content-type")?.includes("application/json")) {
           const data = await response.arrayBuffer();
