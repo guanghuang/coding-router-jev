@@ -81,7 +81,7 @@ export const codexArgs = (baseURL: string, args: string[]) => [
   ...args,
 ];
 
-export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void; onDecision?: (notice: string) => void; desktopNotice?: boolean; port?: number } = {}) {
+export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void; onDecision?: (notice: string) => void; desktopNotice?: boolean; hostname?: string; port?: number } = {}) {
   const route = options.route ?? createRouter();
   const logDir = options.logDirectory ?? DEFAULT_LOG_DIR;
   if (config.logRetentionDays !== undefined) cleanupStaleLogs(logDir, config.logRetentionDays);
@@ -352,7 +352,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
     try { return await job; } finally { if (locks.get(key) === job) locks.delete(key); }
   }
   const server = Bun.serve({
-    hostname: "127.0.0.1", port: options.port ?? 0, idleTimeout: 0,
+    hostname: options.hostname ?? "127.0.0.1", port: options.port ?? 0, idleTimeout: 0,
     async fetch(request) {
       try {
         const url = new URL(request.url);

@@ -786,6 +786,8 @@ Tests use local fake JEV/provider endpoints to cover routing, SDK configuration,
 
 The standalone proxy supports local Codex requests in the desktop app. Configure `TYPESAFE_API_KEY` and `TYPESAFE_BASE_URL` in the environment or `~/.coding-router-jev.env`, then run `codex-jev-proxy` after installing the latest release. For a source checkout, build with `bun run build` and run `./dist/codex-jev-proxy`. It listens on `127.0.0.1:8765`; use `--port 9000` to choose another port. Keep it running while the provider is selected. Release installers include this command starting with version 0.1.4.
 
+To listen on another address, use `codex-jev-proxy --host 0.0.0.0 --port 8765`. Binding to all interfaces exposes the proxy to reachable devices; it does not authenticate clients. Use a firewall or an SSH tunnel to restrict access.
+
 Back up the Windows `%USERPROFILE%\.codex\config.toml` (or `~/.codex/config.toml` on macOS/Linux), then merge the following, placing top-level keys before the first table and updating existing keys instead of duplicating them:
 
 ```toml
