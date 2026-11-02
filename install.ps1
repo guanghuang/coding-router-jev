@@ -39,7 +39,7 @@
 param(
     [string]$Version = '',
     [string]$Dir = '',
-    [ValidateSet('codex-jev', 'claude-jev', 'jev-logs')]
+    [ValidateSet('codex-jev', 'claude-jev', 'jev-logs', 'codex-jev-proxy')]
     [string[]]$Only = @(),
     [switch]$Help
 )
@@ -51,6 +51,8 @@ $Script:Repo = 'guanghuang/coding-router-jev'
 $Script:BinaryName = 'codex-jev'
 $Script:ClaudeBinaryName = 'claude-jev'
 $Script:JevLogsBinaryName = 'jev-logs'
+$Script:ProxyBinaryName = 'codex-jev-proxy'
+$Script:ProxyAssetName = 'codex-jev-proxy-windows-x64.exe'
 $Script:AssetName = 'codex-jev-windows-x64.exe'
 $Script:ClaudeAssetName = 'claude-jev-windows-x64.exe'
 $Script:JevLogsAssetName = 'jev-logs-windows-x64.exe'
@@ -462,6 +464,11 @@ function Main {
             Get-ReleaseAsset -Tag $tag -AssetName $Script:JevLogsAssetName -Destination $jevLogsAssetDest
         }
 
+        if ($Only.Count -eq 0 -or $Only -contains $Script:ProxyBinaryName) {
+            $proxyAssetDest = Join-Path $Script:TempDir $Script:ProxyAssetName
+            Get-ReleaseAsset -Tag $tag -AssetName $Script:ProxyAssetName -Destination $proxyAssetDest
+        }
+
         $sumsDest = Join-Path $Script:TempDir 'SHA256SUMS'
         Get-ReleaseAsset -Tag $tag -AssetName 'SHA256SUMS' -Destination $sumsDest
 
@@ -469,9 +476,13 @@ function Main {
         if ($Only.Count -eq 0 -or $Only -contains $Script:ClaudeBinaryName) { Test-Checksum -FilePath $claudeAssetDest -SumsFilePath $sumsDest }
         if ($Only.Count -eq 0 -or $Only -contains $Script:JevLogsBinaryName) { Test-Checksum -FilePath $jevLogsAssetDest -SumsFilePath $sumsDest }
 
+        if ($Only.Count -eq 0 -or $Only -contains $Script:ProxyBinaryName) { Test-Checksum -FilePath $proxyAssetDest -SumsFilePath $sumsDest }
+
         if ($Only.Count -eq 0 -or $Only -contains $Script:BinaryName) { Install-Binary -Source $assetDest -DestDir $installDir -Name $Script:BinaryName }
         if ($Only.Count -eq 0 -or $Only -contains $Script:ClaudeBinaryName) { Install-Binary -Source $claudeAssetDest -DestDir $installDir -Name $Script:ClaudeBinaryName }
         if ($Only.Count -eq 0 -or $Only -contains $Script:JevLogsBinaryName) { Install-Binary -Source $jevLogsAssetDest -DestDir $installDir -Name $Script:JevLogsBinaryName }
+
+        if ($Only.Count -eq 0 -or $Only -contains $Script:ProxyBinaryName) { Install-Binary -Source $proxyAssetDest -DestDir $installDir -Name $Script:ProxyBinaryName }
 
         Update-UserPath -InstallDir $installDir
 

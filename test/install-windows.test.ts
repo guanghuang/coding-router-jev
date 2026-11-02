@@ -312,7 +312,7 @@ describe("install.ps1", () => {
       expect(jevLogsInfo.size).toBeGreaterThan(0);
     });
 
-    test("verifies checksums for all three binaries", async () => {
+    test("verifies checksums for all four binaries", async () => {
       if (!pwshAvailable) return;
       const server = startFixtureServer(FIXTURES);
       const installDir = join(tempDir, "install-checksums-all");
@@ -328,7 +328,7 @@ describe("install.ps1", () => {
       const combined = stdout + stderr;
       const checksumMatches = combined.match(/Checksum verified:/g);
       expect(checksumMatches).not.toBeNull();
-      expect(checksumMatches!.length).toBe(3);
+      expect(checksumMatches!.length).toBe(4);
     });
   });
 

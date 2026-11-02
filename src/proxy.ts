@@ -7,7 +7,7 @@ import { DEFAULT_STATUS_FORMAT, formatFeedback, type FeedbackValues } from "./fe
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult, type SensitivityAnswers } from "./router";
-import { filterFeedbackEcho, observeStream, type Usage } from "./stream";
+import { filterFeedbackEcho, observeStream, prependDesktopNotice, type Usage } from "./stream";
 import { TIERS, type Candidate, type CodexBody, type Tier } from "./types";
 
 export const AUTO_MODEL = VIRTUAL_MODEL_ID;
@@ -81,7 +81,7 @@ export const codexArgs = (baseURL: string, args: string[]) => [
   ...args,
 ];
 
-export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void } = {}) {
+export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void; onDecision?: (notice: string) => void; desktopNotice?: boolean; port?: number } = {}) {
   const route = options.route ?? createRouter();
   const logDir = options.logDirectory ?? DEFAULT_LOG_DIR;
   if (config.logRetentionDays !== undefined) cleanupStaleLogs(logDir, config.logRetentionDays);
@@ -335,6 +335,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
         };
         notice = config.showFeedback ? formatFeedback(config.feedbackFormat, feedbackValues) : undefined;
         if (notice !== undefined) options.onNotice?.(notice);
+        options.onDecision?.(formatFeedback(config.feedbackFormat, feedbackValues));
         state.notice = notice;
         state.noticeKey = noticeKey;
         history.append({ id, at: new Date().toISOString(), conversation: key, turn: turnKey, prompt: turn.prompt, jev: result, previous: { tier: currentTier, model: currentModel, effort: previousEffort ?? null }, decision: { ...decision, model: selected.id, effort: effort ?? null, effort_update_preserves_prefix: preserved }, cache },
@@ -351,7 +352,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
     try { return await job; } finally { if (locks.get(key) === job) locks.delete(key); }
   }
   const server = Bun.serve({
-    hostname: "127.0.0.1", port: 0, idleTimeout: 0,
+    hostname: "127.0.0.1", port: options.port ?? 0, idleTimeout: 0,
     async fetch(request) {
       try {
         const url = new URL(request.url);
@@ -414,7 +415,12 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
             if (announced.size > 1000) announced.delete(announced.values().next().value!);
             return notice;
           } : undefined;
-          return new Response(observeStream(filterFeedbackEcho(response.body, config.feedbackFormat), body!.model, getNotice, usage), { status: response.status, headers: responseHeaders });
+          let stream = filterFeedbackEcho(response.body, config.feedbackFormat, options.desktopNotice);
+          if (options.desktopNotice && getNotice) {
+            const text = getNotice();
+            if (text) stream = prependDesktopNotice(stream, text);
+          }
+          return new Response(observeStream(stream, body!.model, options.desktopNotice ? undefined : getNotice, usage), { status: response.status, headers: responseHeaders });
         }
         if (response.headers.get("content-type")?.includes("application/json")) {
           const data = await response.arrayBuffer();

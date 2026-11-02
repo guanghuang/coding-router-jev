@@ -2,6 +2,37 @@ import { randomUUID } from "node:crypto";
 import { DEFAULT_FEEDBACK_FORMAT } from "./feedback";
 
 export type Usage = { model: string; read: number | null; created: number | null; responseId?: string };
+export function prependDesktopNotice(source: ReadableStream<Uint8Array>, notice: string): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let pending = "";
+  let itemId: string | undefined;
+  let inserted = false;
+  const prefix = `${notice}\n\n`;
+  function addToItem(item: any) {
+    const part = item?.content?.find((value: any) => value.type === "output_text" && typeof value.text === "string");
+    if (part) part.text = prefix + part.text;
+  }
+  return source.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      pending += decoder.decode(chunk, { stream: true });
+      const frames = pending.split(/\r?\n\r?\n/); pending = frames.pop() ?? "";
+      for (const frame of frames) {
+        let event: any;
+        try { event = JSON.parse(frame.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n")); }
+        catch { controller.enqueue(encoder.encode(frame + "\n\n")); continue; }
+        if (!itemId && event.type === "response.output_item.added" && event.item?.type === "message" && event.item.role === "assistant" && event.item.phase !== "commentary") itemId = event.item.id;
+        if (itemId && event.item_id === itemId && event.type === "response.output_text.delta" && !inserted) { event.delta = prefix + event.delta; inserted = true; }
+        if (inserted && event.item_id === itemId && event.type === "response.output_text.done" && typeof event.text === "string") event.text = prefix + event.text;
+        if (inserted && event.item_id === itemId && event.type === "response.content_part.done" && typeof event.part?.text === "string") event.part.text = prefix + event.part.text;
+        if (inserted && event.type === "response.output_item.done" && event.item?.id === itemId) addToItem(event.item);
+        if (inserted && event.type === "response.completed") for (const item of event.response?.output ?? []) if (item.id === itemId) addToItem(item);
+        controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+      }
+    },
+    flush(controller) { if (pending) controller.enqueue(encoder.encode(pending)); },
+  }));
+}
 function usageOf(response: Record<string, unknown>, fallback: string): Usage {
   const usage = response.usage as { input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } } | undefined;
   const details = usage?.input_tokens_details;
@@ -59,8 +90,8 @@ export function observeStream(source: ReadableStream<Uint8Array>, model: string,
   }));
 }
 
-/** Remove only a matching prefix from upstream assistant commentary items. */
-export function filterFeedbackEcho(source: ReadableStream<Uint8Array>, format?: string): ReadableStream<Uint8Array> {
+/** Remove only a matching prefix from upstream assistant messages. */
+export function filterFeedbackEcho(source: ReadableStream<Uint8Array>, format?: string, includeFinal = false): ReadableStream<Uint8Array> {
   const template = format ?? DEFAULT_FEEDBACK_FORMAT;
   const parts = template.split(/(\{[a-z_]+\})/g);
   const literal = parts.filter(p => !/^\{[a-z_]+\}$/.test(p)).join("");
@@ -88,7 +119,7 @@ export function filterFeedbackEcho(source: ReadableStream<Uint8Array>, format?: 
         let event: any;
         try { event = JSON.parse(raw.split(/\r?\n/).filter(l => l.startsWith("data:")).map(l => l.slice(5).trimStart()).join("\n")); }
         catch { controller.enqueue(encoder.encode(raw + "\n\n")); continue; }
-        if (!itemId && event.type === "response.output_item.added" && event.item?.type === "message" && event.item.role === "assistant" && event.item.phase === "commentary" && typeof event.item.id === "string" && !event.item.id.startsWith("jev-")) itemId = event.item.id;
+        if (!itemId && event.type === "response.output_item.added" && event.item?.type === "message" && event.item.role === "assistant" && (event.item.phase === "commentary" || (includeFinal && event.item.phase !== "commentary")) && typeof event.item.id === "string" && !event.item.id.startsWith("jev-")) itemId = event.item.id;
         if (itemId) {
           frames.push({ raw, event }); size += raw.length;
           if (size > 1024 * 1024) { for (const f of frames) controller.enqueue(encoder.encode(f.raw + "\n\n")); frames = []; size = 0; itemId = undefined; continue; }

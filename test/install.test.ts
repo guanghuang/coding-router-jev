@@ -268,7 +268,7 @@ describe("install.sh", () => {
       expect(jevLogsInfo.mode & 0o111).toBeGreaterThan(0);
     });
 
-    test("verifies checksums for all three binaries", async () => {
+    test("verifies checksums for all four binaries", async () => {
       const server = startFixtureServer(FIXTURES);
       const installDir = join(tempDir, "install-checksums-all");
 
@@ -282,7 +282,7 @@ describe("install.sh", () => {
       const combined = stdout + stderr;
       const checksumMatches = combined.match(/Checksum verified:/g);
       expect(checksumMatches).not.toBeNull();
-      expect(checksumMatches!.length).toBe(3);
+      expect(checksumMatches!.length).toBe(4);
     });
   });
 

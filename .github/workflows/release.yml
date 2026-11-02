@@ -105,6 +105,7 @@ jobs:
             ext=""
             if [ "$target" = "bun-windows-x64" ]; then ext=".exe"; fi
             compile src/cli.ts       "$target" "codex-jev-${suffix}${ext}"
+            compile src/desktop-poc.ts "$target" "codex-jev-proxy-${suffix}${ext}"
             compile src/claude-cli.ts "$target" "claude-jev-${suffix}${ext}"
             compile src/jev-logs.ts  "$target" "jev-logs-${suffix}${ext}"
           done
@@ -139,6 +140,8 @@ jobs:
             exit 1
           fi
 
+          dist/codex-jev-proxy-linux-x64 --help | grep -q "codex-jev-proxy"
+
           echo "--- Smoke test: jev-logs binary runs ---"
           OUTPUT=$(dist/jev-logs-linux-x64 /dev/null --last 1 2>&1) || true
           echo "$OUTPUT"
@@ -154,10 +157,15 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum \
+            codex-jev-proxy-darwin-arm64 \
             codex-jev-darwin-arm64 \
+            codex-jev-proxy-darwin-x64 \
             codex-jev-darwin-x64 \
+            codex-jev-proxy-linux-arm64 \
             codex-jev-linux-arm64 \
+            codex-jev-proxy-linux-x64 \
             codex-jev-linux-x64 \
+            codex-jev-proxy-windows-x64.exe \
             codex-jev-windows-x64.exe \
             claude-jev-darwin-arm64 \
             claude-jev-darwin-x64 \
@@ -180,10 +188,15 @@ jobs:
         with:
           name: release-binaries
           path: |
+            dist/codex-jev-proxy-darwin-arm64
             dist/codex-jev-darwin-arm64
+            dist/codex-jev-proxy-darwin-x64
             dist/codex-jev-darwin-x64
+            dist/codex-jev-proxy-linux-arm64
             dist/codex-jev-linux-arm64
+            dist/codex-jev-proxy-linux-x64
             dist/codex-jev-linux-x64
+            dist/codex-jev-proxy-windows-x64.exe
             dist/codex-jev-windows-x64.exe
             dist/claude-jev-darwin-arm64
             dist/claude-jev-darwin-x64
@@ -342,10 +355,15 @@ jobs:
             --title "codex-jev / claude-jev $TAG" \
             --notes-file release-notes.md \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
+            dist/codex-jev-proxy-darwin-arm64 \
             dist/codex-jev-darwin-arm64 \
+            dist/codex-jev-proxy-darwin-x64 \
             dist/codex-jev-darwin-x64 \
+            dist/codex-jev-proxy-linux-arm64 \
             dist/codex-jev-linux-arm64 \
+            dist/codex-jev-proxy-linux-x64 \
             dist/codex-jev-linux-x64 \
+            dist/codex-jev-proxy-windows-x64.exe \
             dist/codex-jev-windows-x64.exe \
             dist/claude-jev-darwin-arm64 \
             dist/claude-jev-darwin-x64 \
