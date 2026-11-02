@@ -34,6 +34,7 @@ describe("configuration", () => {
       showStatus: false,
       showFeedback: true,
       logRetentionDays: undefined,
+      logEnabled: true,
       claudeContextWindow: undefined,
     });
   });

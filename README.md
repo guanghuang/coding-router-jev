@@ -524,7 +524,8 @@ On **Windows**, `~` resolves to `%USERPROFILE%` (typically `C:\Users\<name>`), s
 | `CODING_ROUTER_STATUS_FORMAT` | Status format for Codex/Claude/Pi; unset uses `[Jev] {model} · {effort}` |
 | `CODING_ROUTER_STATUS_SHOW` | Show Claude/Pi status lines; default `false`. Codex always shows its router label |
 | `CODING_ROUTER_FEEDBACK_SHOW` | Show response feedback across agents; default `true` |
-| `CODING_ROUTER_LOG_RETENTION_DAYS` | Unset (no cleanup); positive number enables startup deletion of stale session logs older than this many days |
+| `CODING_ROUTER_LOG_ENABLED` | `true`; set to `false` to disable JSONL creation and writes across all agents |
+| `CODING_ROUTER_LOG_RETENTION_DAYS` | Unset (no cleanup); positive days enables startup cleanup and standalone-proxy checks when a conversation is first seen |
 | `CODING_ROUTER_JEV_LOGS_SKILL_INSTALL` | `true`; set to `false` to skip automatic `jev-logs` skill installation |
 
 Configured model choices take priority over catalog detection. The catalog enriches descriptions and effort capabilities. An explicitly configured exact ID (for example `chatgpt-6.1-sol`) is sent unchanged — apart from the existing `chatgpt-6*` to catalog `gpt-6*` slug matching — and is never silently upgraded or rewritten as a latest alias. Account model availability is ultimately enforced by the provider.
@@ -675,7 +676,27 @@ Logs contain user prompts and routing payloads (including optional recent contex
 
 ### Log retention
 
-Set `CODING_ROUTER_LOG_RETENTION_DAYS` to a positive number in the process environment or `~/.coding-router-jev.env` to enable startup cleanup. When the launcher starts, session JSONL files in the log directory whose modification time is older than the configured number of days are deleted. New logs for Codex, Claude, and Pi use `jev-*.jsonl`. Cleanup also recognizes legacy files for the launching agent; unrelated files and directories are never touched. If the setting is missing, blank, invalid, zero, or negative, no logs are deleted. Cleanup runs once at startup; there is no background timer. If an individual stale file cannot be removed, the error is logged and the launcher continues normally.
+Set `CODING_ROUTER_LOG_ENABLED=false` in the process environment or `~/.coding-router-jev.env` to disable JSONL creation and writes for Codex, Claude, and Pi. It defaults to `true`. This does not disable routing or feedback, or remove existing files by itself. Log queries report no active log (or that logging is disabled).
+
+Set `CODING_ROUTER_LOG_RETENTION_DAYS` to a positive number to enable cleanup. At startup, files whose last modification time is older than the configured number of days are eligible for deletion. New logs for Codex, Claude, and Pi use `jev-*.jsonl`; cleanup also recognizes legacy files for the launching agent and leaves unrelated files alone. Missing, blank, invalid, zero, or negative retention disables deletion. Cleanup errors do not stop routing. If retention is configured, startup cleanup still runs when JSONL writes are disabled.
+
+The standalone `codex-jev-proxy` also checks retention when first seeing a conversation, without scanning on every write or running a background timer. Conversation discovery tracking is bounded to the most recent 1,000 keys; older keys may trigger another check when revisited. A file locked for a write or covered by a live routing-operation marker is skipped. Idle conversation logs can expire; resuming an expired conversation recreates its file on the next logged decision. No traffic means no additional cleanup until startup or a newly seen conversation.
+
+### Shared server conversation logs
+
+`codex-jev-proxy` writes one append-only file per conversation: `jev-codex-<conversation-key>.jsonl`. It prints the log directory at startup and the conversation key and file path when that conversation is first logged. Chats and proxy processes sharing the same key and local log directory append to the same file. Existing process-based logs are kept for retention cleanup rather than migrated. The Codex and Claude CLI wrappers retain their session-file behavior, and Pi retains its native session files.
+
+The key is derived from request identifiers, or a response-ID association held in proxy memory. If those are missing, the existing instructions/first-user-message fallback is used; identical fallback inputs can share a key. Resuming a chat reuses its log only when its key is stable. Conversation files persist across proxy restarts, but routing state still resets. This does not create user authentication or separate filesystem access for teammates.
+
+Query an individual conversation with the existing command (no directory-wide search is required):
+
+```sh
+jev-logs /tmp/coding-router-jev/jev-codex-<conversation-key>.jsonl --last 3
+```
+
+On Windows, the directory is under the service user's temporary directory instead of `/tmp`. The CLI wrapper's `JEV_SESSION_LOG` and skill setup are unchanged; the standalone proxy does not automatically install or bind a desktop skill.
+
+Writers and cleanup coordinate through exclusive `.lock` files on the same host/local filesystem; shared network filesystems and multi-host coordination are not supported. A crashed process can leave a lock. In that case routing continues with a logging warning; stop all proxies using that directory, remove the affected `.jsonl.lock` file, and restart. Do not remove locks while writers are running. Active markers left by dead processes are removed during cleanup. Logs retain the existing sensitivity filtering and private file permissions.
 
 ### Log redaction
 
@@ -802,7 +823,7 @@ requires_openai_auth = true
 supports_websockets = false
 ```
 
-Match the URL port to the proxy port, restart the desktop app, select Coding Router Jev, and start a new local task. For a WSL proxy, Windows localhost forwarding must be available; check with `Test-NetConnection 127.0.0.1 -Port 8765` in PowerShell. If the proxy is stopped, the app may show a generic reconnect message: start the proxy and retry. To undo setup, restore the config backup and restart the app. Existing chats may retain their original provider. The proxy prints its JSONL log path at startup; its routing state resets when restarted. Desktop feedback is included in the assistant response and may be included in later conversation context.
+Match the URL port to the proxy port, restart the desktop app, select Coding Router Jev, and start a new local task. For a WSL proxy, Windows localhost forwarding must be available; check with `Test-NetConnection 127.0.0.1 -Port 8765` in PowerShell. If the proxy is stopped, the app may show a generic reconnect message: start the proxy and retry. To undo setup, restore the config backup and restart the app. Existing chats may retain their original provider. The proxy prints the log directory at startup and a conversation's file path when first logged; see [shared server conversation logs](#shared-server-conversation-logs). Its routing state resets when restarted. Desktop feedback is included in the assistant response and may be included in later conversation context.
 - Pi git/local installation end-to-end on macOS, Linux, and Windows (package manifest and resource discovery are validated in unit tests; platform-specific Pi runtime installation is documented but not automated in CI).
 
 ## Troubleshooting

@@ -117,7 +117,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
   const route = options.route ?? createRouter();
   const logDir = options.logDirectory ?? DEFAULT_LOG_DIR;
   if (config.logRetentionDays !== undefined) cleanupStaleLogs(logDir, config.logRetentionDays, "claude");
-  const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, logDir, "claude");
+  const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, logDir, "claude", config.logEnabled);
 
   const upstreamBase = options.upstreamBaseURL ?? (process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com");
 

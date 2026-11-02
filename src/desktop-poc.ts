@@ -21,10 +21,12 @@ try {
     port,
     hostname,
     desktopNotice: true,
+    conversationLogs: true,
+    onLog: (key, path) => console.log(`Conversation ${key}: ${path}`),
     onDecision: config.showFeedback ? notice => console.log(notice) : undefined,
   });
   console.log(`Codex desktop proxy: http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${proxy.port}`);
-  console.log(`Routing log: ${proxy.logPath}`);
+  console.log(config.logEnabled ? `Routing log directory: ${proxy.logDirectory}` : "JSONL logging disabled.");
   console.log("Press Ctrl+C to stop.");
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { proxy.close(); process.exit(0); });
 } catch (error) {

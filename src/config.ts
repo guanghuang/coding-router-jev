@@ -29,6 +29,7 @@ export type Config = {
   showStatus: boolean;
   showFeedback: boolean;
   logRetentionDays: number | undefined;
+  logEnabled: boolean;
   claudeContextWindow: number | undefined;
 };
 
@@ -84,6 +85,7 @@ export function configFromEnv(environment: Record<string, string | undefined> = 
     showStatus: value("CODING_ROUTER_STATUS_SHOW", "false") === "true",
     showFeedback: value("CODING_ROUTER_FEEDBACK_SHOW", "true") !== "false",
     logRetentionDays: parseRetentionDays(value("CODING_ROUTER_LOG_RETENTION_DAYS", "")),
+    logEnabled: value("CODING_ROUTER_LOG_ENABLED", "true") !== "false",
     claudeContextWindow: parseClaudeContextWindow(value("CODING_ROUTER_CONTEXT_WINDOW_CLAUDE", "")),
   };
 }

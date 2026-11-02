@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, chmodSync, readdirSync, lstatSync, unlinkSyn
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { SensitivityAnswers } from "./router";
+import { hasActiveLogLease, tryLogLock } from "./log-lock";
 
 export const DEFAULT_LOG_DIR = join(tmpdir(), "coding-router-jev");
 
@@ -37,12 +38,19 @@ export function cleanupStaleLogs(directory: string, retentionDays: number, agent
   for (const entry of entries) {
     if (!/^jev-.+\.jsonl$/.test(entry) && !pattern.test(entry)) continue;
     const filePath = join(directory, entry);
+    let release: (() => void) | undefined;
     try {
+      const candidate = lstatSync(filePath);
+      if (!candidate.isFile() || candidate.mtimeMs >= cutoff) continue;
+      release = tryLogLock(filePath);
+      if (!release) continue;
       const info = lstatSync(filePath);
       if (!info.isFile()) continue;
-      if (info.mtimeMs < cutoff) unlinkSync(filePath);
+      if (info.mtimeMs < cutoff && !hasActiveLogLease(filePath)) unlinkSync(filePath);
     } catch (error) {
-      console.error(`[Jev] could not remove stale log ${entry}: ${(error as Error).message}`);
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(`[Jev] could not remove stale log ${entry}: ${(error as Error).message}`);
+    } finally {
+      release?.();
     }
   }
 }
@@ -88,16 +96,19 @@ export function sanitizeRecord(
   return copy;
 }
 
-export function sessionHistory(session: string, directory = DEFAULT_LOG_DIR, agent: AgentPrefix = "codex") {
+export function sessionHistory(session: string, directory = DEFAULT_LOG_DIR, agent: AgentPrefix = "codex", enabled = true) {
   if (!SUPPORTED_PREFIXES.has(agent)) {
     throw new Error(`Unsupported agent prefix: ${agent}. Supported: ${[...SUPPORTED_PREFIXES].join(", ")}`);
   }
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
+  if (enabled) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    chmodSync(directory, 0o700);
+  }
   const path = join(directory, `jev-${session.replace(/[^\w-]/g, "")}.jsonl`);
   return {
     path,
     update(id: string, update: (record: Record<string, any>) => Record<string, any>) {
+      if (!enabled) return;
       const temporary = `${path}.tmp`;
       try {
         // ponytail: rewrite this session's log; use an indexed store if session logs become large.
@@ -118,6 +129,7 @@ export function sessionHistory(session: string, directory = DEFAULT_LOG_DIR, age
       }
     },
     append(record: unknown, classification?: SensitivityAnswers, minConfidence?: number) {
+      if (!enabled) return;
       try {
         const toWrite = minConfidence !== undefined ? sanitizeRecord(record as Record<string, any>, classification, minConfidence) : record;
         appendFileSync(path, `${JSON.stringify(toWrite)}\n`, { mode: 0o600 });
