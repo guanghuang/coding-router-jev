@@ -5,6 +5,7 @@ import { conversationKey, hash, isJevNotice, newTurn, recentContext } from "./co
 import { applyEffort, type EffortState } from "./effort";
 import { DEFAULT_STATUS_FORMAT, formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
+import { conversationHistory } from "./conversation-history";
 import { decide, decisionLabel } from "./policy";
 import { buildRequest, createRouter, type Route, type RoutingResult, type SensitivityAnswers } from "./router";
 import { filterFeedbackEcho, observeStream, prependDesktopNotice, type Usage } from "./stream";
@@ -81,11 +82,12 @@ export const codexArgs = (baseURL: string, args: string[]) => [
   ...args,
 ];
 
-export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void; onDecision?: (notice: string) => void; desktopNotice?: boolean; hostname?: string; port?: number } = {}) {
+export function startProxy(config: Config, options: { route?: Route; apiBaseURL?: string; chatgptBaseURL?: string; logDirectory?: string; session?: string; onNotice?: (notice: string) => void; onDecision?: (notice: string) => void; desktopNotice?: boolean; conversationLogs?: boolean; onLog?: (key: string, path: string) => void; hostname?: string; port?: number } = {}) {
   const route = options.route ?? createRouter();
   const logDir = options.logDirectory ?? DEFAULT_LOG_DIR;
   if (config.logRetentionDays !== undefined) cleanupStaleLogs(logDir, config.logRetentionDays);
-  const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, logDir);
+  const history = sessionHistory(options.session ?? `${process.pid}-${randomUUID()}`, logDir, "codex", config.logEnabled && !options.conversationLogs);
+  const conversations = config.logEnabled && options.conversationLogs ? conversationHistory(logDir, config.logRetentionDays, options.onLog) : undefined;
   const catalog = new Map<string, CatalogModel>();
   const states = new Map<string, State>();
   const locks = new Map<string, Promise<unknown>>();
@@ -302,44 +304,52 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
       let notice: string | undefined;
       let noticeKey: string | undefined;
       if (turn && turnKey !== state.lastTurn) {
-        const started = Date.now();
-        const currentModel = state.model;
-        const currentTier = state.tier;
-        const last = state.last;
-        const cache = summarizeCacheRun(state.observations, currentModel, started);
-        const routingInput = { prompt: turn.prompt, currentTier, currentModel, currentEffort: state.effort.effort ?? body.reasoning?.effort, contextTokens: Math.round(JSON.stringify(body.input ?? "").length / 4), candidates, ...(config.sendRecentContext ? { recentContext: recentContext(body) } : {}), cache };
-        let result: RoutingResult;
-        try { result = await route(routingInput); }
-        catch (error) { result = { request: buildRequest(routingInput), response: null, error: error instanceof Error ? error.message : "JEV routing failed", ms: Date.now() - started }; }
-        const modelAnswer = result.response?.answers?.model;
-        const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence) && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1 ? modelAnswer.confidence : null;
-        const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, candidates, config.minConfidence);
-        const selected = candidates.find(candidate => candidate.tier === decision.tier)!;
-        const effortAnswer = result.response?.answers?.reasoning_effort;
-        const desired = effortAnswer?.type === "choice" && Number.isFinite(effortAnswer.confidence) && effortAnswer.confidence >= config.minConfidence && effortAnswer.confidence <= 1 && selected.efforts.includes(effortAnswer.choice) ? effortAnswer.choice : undefined;
-        const previousEffort = state.effort.effort ?? body.reasoning?.effort;
-        const effort = selected.efforts.length ? desired ?? (previousEffort && selected.efforts.includes(previousEffort) ? previousEffort : selected.defaultEffort) : body.reasoning?.effort;
-        if (state.model !== selected.id) state.effort = { updates: [] };
-        state.model = selected.id;
-        state.tier = decision.tier;
-        const preserved = applyEffort(body, state.effort, selected.id, effort, turn.anchor);
-        state.lastTurn = turnKey;
-        const id = randomUUID();
-        noticeKey = `${key}:${turnKey}`;
-        const jevUsage = result.response?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-        const feedbackValues: FeedbackValues = {
-          tier: selected.tier, model: selected.id, effort, decision: decisionLabel(decision.reason), confidence,
-          previous_model: currentModel, cache_read: last?.read ?? null, cache_write: last?.created ?? null,
-          jev_tokens_input: typeof jevUsage?.input_tokens === "number" && Number.isFinite(jevUsage.input_tokens) ? jevUsage.input_tokens : undefined,
-          jev_tokens_output: typeof jevUsage?.output_tokens === "number" && Number.isFinite(jevUsage.output_tokens) ? jevUsage.output_tokens : undefined,
-        };
-        notice = config.showFeedback ? formatFeedback(config.feedbackFormat, feedbackValues) : undefined;
-        if (notice !== undefined) options.onNotice?.(notice);
-        options.onDecision?.(formatFeedback(config.feedbackFormat, feedbackValues));
-        state.notice = notice;
-        state.noticeKey = noticeKey;
-        history.append({ id, at: new Date().toISOString(), conversation: key, turn: turnKey, prompt: turn.prompt, jev: result, previous: { tier: currentTier, model: currentModel, effort: previousEffort ?? null }, decision: { ...decision, model: selected.id, effort: effort ?? null, effort_update_preserves_prefix: preserved }, cache },
-          result.response?.answers as SensitivityAnswers | undefined, config.minConfidence);
+        let conversationLog: Awaited<ReturnType<NonNullable<typeof conversations>["open"]>> | undefined;
+        if (conversations) {
+          try { conversationLog = await conversations.open(key); }
+          catch { console.error("[Jev] could not open conversation log; check permissions and stale .lock files with all proxies stopped"); }
+        }
+        try {
+          const started = Date.now();
+          const currentModel = state.model;
+          const currentTier = state.tier;
+          const last = state.last;
+          const cache = summarizeCacheRun(state.observations, currentModel, started);
+          const routingInput = { prompt: turn.prompt, currentTier, currentModel, currentEffort: state.effort.effort ?? body.reasoning?.effort, contextTokens: Math.round(JSON.stringify(body.input ?? "").length / 4), candidates, ...(config.sendRecentContext ? { recentContext: recentContext(body) } : {}), cache };
+          let result: RoutingResult;
+          try { result = await route(routingInput); }
+          catch (error) { result = { request: buildRequest(routingInput), response: null, error: error instanceof Error ? error.message : "JEV routing failed", ms: Date.now() - started }; }
+          const modelAnswer = result.response?.answers?.model;
+          const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence) && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1 ? modelAnswer.confidence : null;
+          const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, candidates, config.minConfidence);
+          const selected = candidates.find(candidate => candidate.tier === decision.tier)!;
+          const effortAnswer = result.response?.answers?.reasoning_effort;
+          const desired = effortAnswer?.type === "choice" && Number.isFinite(effortAnswer.confidence) && effortAnswer.confidence >= config.minConfidence && effortAnswer.confidence <= 1 && selected.efforts.includes(effortAnswer.choice) ? effortAnswer.choice : undefined;
+          const previousEffort = state.effort.effort ?? body.reasoning?.effort;
+          const effort = selected.efforts.length ? desired ?? (previousEffort && selected.efforts.includes(previousEffort) ? previousEffort : selected.defaultEffort) : body.reasoning?.effort;
+          if (state.model !== selected.id) state.effort = { updates: [] };
+          state.model = selected.id;
+          state.tier = decision.tier;
+          const preserved = applyEffort(body, state.effort, selected.id, effort, turn.anchor);
+          state.lastTurn = turnKey;
+          const id = randomUUID();
+          noticeKey = `${key}:${turnKey}`;
+          const jevUsage = result.response?.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+          const feedbackValues: FeedbackValues = {
+            tier: selected.tier, model: selected.id, effort, decision: decisionLabel(decision.reason), confidence,
+            previous_model: currentModel, cache_read: last?.read ?? null, cache_write: last?.created ?? null,
+            jev_tokens_input: typeof jevUsage?.input_tokens === "number" && Number.isFinite(jevUsage.input_tokens) ? jevUsage.input_tokens : undefined,
+            jev_tokens_output: typeof jevUsage?.output_tokens === "number" && Number.isFinite(jevUsage.output_tokens) ? jevUsage.output_tokens : undefined,
+          };
+          notice = config.showFeedback ? formatFeedback(config.feedbackFormat, feedbackValues) : undefined;
+          if (notice !== undefined) options.onNotice?.(notice);
+          options.onDecision?.(formatFeedback(config.feedbackFormat, feedbackValues));
+          state.notice = notice;
+          state.noticeKey = noticeKey;
+          try { await (conversationLog ?? history).append({ id, at: new Date().toISOString(), conversation: key, turn: turnKey, prompt: turn.prompt, jev: result, previous: { tier: currentTier, model: currentModel, effort: previousEffort ?? null }, decision: { ...decision, model: selected.id, effort: effort ?? null, effort_update_preserves_prefix: preserved }, cache },
+            result.response?.answers as SensitivityAnswers | undefined, config.minConfidence);
+          } catch { console.error("[Jev] could not write conversation log"); }
+        } finally { conversationLog?.close(); }
       } else if (!compact) {
         applyEffort(body, state.effort, state.model, state.effort.effort, turn?.anchor);
         if (turn) { notice = state.notice; noticeKey = state.noticeKey; }
@@ -437,5 +447,5 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
       }
     },
   });
-  return { port: server.port!, logPath: history.path, close: () => server.stop(true) };
+  return { port: server.port!, logPath: history.path, logDirectory: logDir, close: () => server.stop(true) };
 }

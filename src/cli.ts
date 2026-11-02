@@ -16,7 +16,7 @@ try {
     const config = configFromEnv();
     proxy = startProxy(config);
     childArgs = codexArgs(`http://127.0.0.1:${proxy.port}`, args);
-    logPath = proxy.logPath;
+    logPath = config.logEnabled ? proxy.logPath : undefined;
   } else {
     console.error("[Jev] TYPESAFE_API_KEY is not set; starting Codex without routing.");
   }

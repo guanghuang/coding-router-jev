@@ -28,7 +28,7 @@ try {
     });
     childArgs = claudeArgs(args, process.env);
     if (statusDisplay) childArgs.push("--settings", statusDisplay.settingsPath);
-    logPath = proxy.logPath;
+    logPath = config.logEnabled ? proxy.logPath : undefined;
 
     // Generate session-local plugin for jev-logs skill
     if (logPath) {

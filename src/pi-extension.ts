@@ -504,7 +504,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     if (confidence !== undefined) result.confidence = confidence;
     onResult?.(result);
 
-    if (history && meta?.reason === "user") {
+    if (config.logEnabled && history && meta?.reason === "user") {
       const decisionId = `pi-${sessionId ?? "unknown"}-${++decisionCounter}-${randomUUID()}`;
       lastDecisionId = decisionId;
       const record: Record<string, unknown> = {
@@ -568,7 +568,7 @@ export function createPiAdapter(options: CreateAdapterOptions) {
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
   }): void {
-    if (!history) return;
+    if (!config.logEnabled || !history) return;
     const effectiveDecisionId = obs.decisionId ?? lastDecisionId;
     if (history.update && effectiveDecisionId) {
       history.update(effectiveDecisionId, record => {
@@ -695,6 +695,7 @@ export default async function registerJevExtension(pi: ExtensionAPI): Promise<vo
       filter_date: Type.Optional(Type.String()),
     }),
     async execute(_id, args, _signal, _update, ctx) {
+      if (!config.logEnabled) return { content: [{ type: "text", text: "JSONL logging is disabled." }], details: {} };
       const history = sessionHistory(ctx.sessionManager.getSessionId(), DEFAULT_LOG_DIR, "pi");
       const text = piQueryLogs(history.path, {
         last: args.last, detail: args.detail,
@@ -730,7 +731,7 @@ export default async function registerJevExtension(pi: ExtensionAPI): Promise<vo
     thinkingLevels: PI_THINKING_LEVELS,
     async route(request: ModelRouteRequest<AdapterState>, ctx: ExtensionContext) {
       const sessionId = ctx.sessionManager.getSessionId();
-      const history = sessionHistory(sessionId, DEFAULT_LOG_DIR, "pi");
+      const history = sessionHistory(sessionId, DEFAULT_LOG_DIR, "pi", config.logEnabled);
       const available = new Set(ctx.modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`));
       const registry: PiModelRegistry = {
         find(provider, modelId) {
