@@ -1,18 +1,19 @@
 {
   "name": "coding-router-jev",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Routes Codex turns through JEV with configurable models and reasoning effort",
   "license": "MIT",
   "type": "module",
   "bin": {
     "codex-jev": "src/cli.ts",
+    "codex-jev-proxy": "src/desktop-poc.ts",
     "claude-jev": "src/claude-cli.ts",
     "jev-logs": "src/jev-logs.ts"
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
-    "build": "bun build src/cli.ts --compile --outfile dist/codex-jev && bun build src/claude-cli.ts --compile --outfile dist/claude-jev && bun build src/jev-logs.ts --compile --outfile dist/jev-logs",
+    "build": "bun build src/cli.ts --compile --outfile dist/codex-jev && bun build src/desktop-poc.ts --compile --outfile dist/codex-jev-proxy && bun build src/claude-cli.ts --compile --outfile dist/claude-jev && bun build src/jev-logs.ts --compile --outfile dist/jev-logs",
     "check": "tsc --noEmit",
     "test": "bun test"
   },

@@ -78,7 +78,7 @@ Before changing repository visibility:
 
 ## Distribution
 
-The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout. Each release includes binaries for `codex-jev`, `claude-jev`, and `jev-logs` for all supported platforms.
+The repository's `package.json` sets `"private": true`. This prevents accidental `npm publish` but has no effect on GitHub binary releases. The distributed binaries are standalone executables built with `bun build --compile`; npm is not part of this rollout. Each release includes binaries for `codex-jev`, `codex-jev-proxy`, `claude-jev`, and `jev-logs` for all supported platforms.
 
 Public downloads do not require GitHub credentials.
 
@@ -88,7 +88,7 @@ Download a prebuilt standalone binary from [GitHub Releases](https://github.com/
 
 ### One-command installer (macOS/Linux)
 
-The `install.sh` script detects your OS and architecture, downloads the correct binaries for `codex-jev`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and places them in `~/.local/bin`. No sudo required.
+The `install.sh` script detects your OS and architecture, downloads the correct binaries for `codex-jev`, `codex-jev-proxy`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and places them in `~/.local/bin`. No sudo required.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.sh | sh
@@ -140,7 +140,7 @@ sh install.sh --dir /opt/bin
 **Uninstall (macOS/Linux):**
 
 ```sh
-rm ~/.local/bin/codex-jev ~/.local/bin/claude-jev ~/.local/bin/jev-logs
+rm ~/.local/bin/codex-jev ~/.local/bin/codex-jev-proxy ~/.local/bin/claude-jev ~/.local/bin/jev-logs
 # or your custom --dir path
 # ~/.coding-router-jev.env is yours to keep or remove
 ```
@@ -149,11 +149,11 @@ The installer never modifies `~/.coding-router-jev.env` or shell startup files. 
 
 #### Upgrade and configuration preservation (macOS/Linux)
 
-Re-running `install.sh` (with or without `--version`) replaces only the `codex-jev`, `claude-jev`, and `jev-logs` binaries. Your configuration file (`~/.coding-router-jev.env`) and any shell startup changes you made are never touched. To upgrade to the latest release, run the same installer command you used originally. To pin or roll back, pass `--version`.
+Re-running `install.sh` (with or without `--version`) replaces only the `codex-jev`, `codex-jev-proxy`, `claude-jev`, and `jev-logs` binaries. Your configuration file (`~/.coding-router-jev.env`) and any shell startup changes you made are never touched. To upgrade to the latest release, run the same installer command you used originally. Older pinned releases do not include the proxy and are not supported by this installer.
 
 ### One-command installer (Windows)
 
-The `install.ps1` PowerShell script downloads the Windows x64 binaries for `codex-jev`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and installs them to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
+The `install.ps1` PowerShell script downloads the Windows x64 binaries for `codex-jev`, `codex-jev-proxy`, `claude-jev`, and `jev-logs`, verifies their SHA-256 checksums, and installs them to `$env:LOCALAPPDATA\coding-router-jev\bin`. No administrator privileges required.
 
 ```powershell
 irm https://raw.githubusercontent.com/guanghuang/coding-router-jev/main/install.ps1 | iex
@@ -200,6 +200,7 @@ Get-Content install.ps1   # review the script
 Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev.exe"
 Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\claude-jev.exe"
 Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\jev-logs.exe"
+Remove-Item "$env:LOCALAPPDATA\coding-router-jev\bin\codex-jev-proxy.exe"
 # %USERPROFILE%\.coding-router-jev.env is yours to keep or remove
 ```
 
@@ -207,7 +208,7 @@ The installer adds the install directory to the user `PATH` (not the system `PAT
 
 #### Upgrade and configuration preservation (Windows)
 
-Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.exe`, `claude-jev.exe`, and `jev-logs.exe`. Your configuration file (`~/.coding-router-jev.env`, which on Windows resolves to `%USERPROFILE%\.coding-router-jev.env`) and user `PATH` entries are preserved. If an existing binary is locked by a running process, the installer will report an error — close the process first, then retry.
+Re-running `install.ps1` (with or without `-Version`) replaces only `codex-jev.exe`, `codex-jev-proxy.exe`, `claude-jev.exe`, and `jev-logs.exe`. Your configuration file (`~/.coding-router-jev.env`, which on Windows resolves to `%USERPROFILE%\.coding-router-jev.env`) and user `PATH` entries are preserved. If an existing binary is locked by a running process, the installer will report an error — close the process first, then retry.
 
 > **Note:** The binary is unsigned. Windows SmartScreen may display a "Windows protected your PC" dialog on first run. Click **More info → Run anyway**. This is expected for unsigned executables distributed outside the Windows Store. The installer itself runs within PowerShell and does not trigger SmartScreen.
 
@@ -541,7 +542,7 @@ The shared routing configuration includes model mappings for Pi extensions. Pi u
 | Variable | Default |
 | --- | --- |
 | `CODING_ROUTER_FAST_MODEL_PI` | `openai-codex/gpt-6-luna` |
-| `CODING_ROUTER_BALANCED_MODEL_PI` | `openai-codex/gpt-6.1-sol` |
+| `CODING_ROUTER_BALANCED_MODEL_PI` | `openai-codex/gpt-6.1-sol` (default); set to `openai-codex/gpt-6.1-terra` to use Terra |
 | `CODING_ROUTER_STRONG_MODEL_PI` | `openai-codex/gpt-6.1-sol` |
 | `CODING_ROUTER_LONG_MODEL_PI` | `openai-codex/gpt-6-astra` |
 
@@ -763,7 +764,7 @@ git push origin v0.2.0
 
 The `.github/workflows/release.yml` workflow validates, cross-compiles, and publishes release assets. The tag version must match `package.json`. Trigger `workflow_dispatch` manually to test the build pipeline without publishing — the version-tag check is skipped and the release job runs only on tag push.
 
-Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. A live read-only Codex smoke test also passed: JEV selected Fast (`gpt-6-luna`) at Low effort, Codex returned the requested `hi`, and the JSONL exchange was recorded. Multi-turn effort changes and interactive notification behavior have been verified locally but not yet in a live interactive session. Other platforms and desktop routing have not been validated.
+Tests use local fake JEV/provider endpoints to cover routing, SDK configuration, stream fragmentation, tool continuations, retry deduplication, effort-update replay, and private JSONL records. Desktop routing was manually exercised through WSL and the Windows app; other desktop platforms have not been validated.
 
 ### Installer verification status
 
@@ -779,7 +780,27 @@ Tests use local fake JEV/provider endpoints to cover routing, SDK configuration,
 
 - Linux ARM64 on physical hardware (CI cross-compiles only).
 - Interactive multi-turn routing sessions on all platforms (verified locally on macOS only).
-- ChatGPT desktop or Work integration (not implemented; not advertised).
+- Work integration (not implemented).
+
+### Desktop Codex proxy
+
+The standalone proxy supports local Codex requests in the desktop app. Configure `TYPESAFE_API_KEY` and `TYPESAFE_BASE_URL` in the environment or `~/.coding-router-jev.env`, then run `codex-jev-proxy` after installing the latest release. For a source checkout, build with `bun run build` and run `./dist/codex-jev-proxy`. It listens on `127.0.0.1:8765`; use `--port 9000` to choose another port. Keep it running while the provider is selected. Release installers include this command starting with version 0.1.4.
+
+Back up the Windows `%USERPROFILE%\.codex\config.toml` (or `~/.codex/config.toml` on macOS/Linux), then merge the following, placing top-level keys before the first table and updating existing keys instead of duplicating them:
+
+```toml
+model = "coding-router-jev"
+model_provider = "coding_router_jev"
+
+[model_providers.coding_router_jev]
+name = "Coding Router Jev"
+base_url = "http://127.0.0.1:8765"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
+
+Match the URL port to the proxy port, restart the desktop app, select Coding Router Jev, and start a new local task. For a WSL proxy, Windows localhost forwarding must be available; check with `Test-NetConnection 127.0.0.1 -Port 8765` in PowerShell. If the proxy is stopped, the app may show a generic reconnect message: start the proxy and retry. To undo setup, restore the config backup and restart the app. Existing chats may retain their original provider. The proxy prints its JSONL log path at startup; its routing state resets when restarted. Desktop feedback is included in the assistant response and may be included in later conversation context.
 - Pi git/local installation end-to-end on macOS, Linux, and Windows (package manifest and resource discovery are validated in unit tests; platform-specific Pi runtime installation is documented but not automated in CI).
 
 ## Troubleshooting

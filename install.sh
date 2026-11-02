@@ -23,6 +23,7 @@ REPO="guanghuang/coding-router-jev"
 BINARY_NAME="codex-jev"
 CLAUDE_BINARY_NAME="claude-jev"
 JEV_LOGS_BINARY_NAME="jev-logs"
+PROXY_BINARY_NAME="codex-jev-proxy"
 INSTALL_ONLY=""
 
 # Guard against unset HOME early with a clear message.
@@ -64,7 +65,7 @@ parse_args() {
         shift ;;
       --only)
         [ $# -ge 2 ] || die "--only requires a binary name"
-        case "$2" in codex-jev|claude-jev|jev-logs) INSTALL_ONLY="$INSTALL_ONLY $2" ;; *) die "unknown binary: $2" ;; esac
+        case "$2" in codex-jev|claude-jev|jev-logs|codex-jev-proxy) INSTALL_ONLY="$INSTALL_ONLY $2" ;; *) die "unknown binary: $2" ;; esac
         shift 2 ;;
       --help|-h)
         show_help; exit 0 ;;
@@ -137,6 +138,7 @@ detect_platform() {
 
   ASSET_NAME="${BINARY_NAME}-${PLATFORM_OS}-${PLATFORM_ARCH}"
   CLAUDE_ASSET_NAME="${CLAUDE_BINARY_NAME}-${PLATFORM_OS}-${PLATFORM_ARCH}"
+  PROXY_ASSET_NAME="${PROXY_BINARY_NAME}-${PLATFORM_OS}-${PLATFORM_ARCH}"
   JEV_LOGS_ASSET_NAME="${JEV_LOGS_BINARY_NAME}-${PLATFORM_OS}-${PLATFORM_ARCH}"
   log "Detected platform: ${PLATFORM_OS}/${PLATFORM_ARCH} (assets: ${ASSET_NAME}, ${CLAUDE_ASSET_NAME}, ${JEV_LOGS_ASSET_NAME})"
 }
@@ -351,15 +353,18 @@ main() {
   selected "$BINARY_NAME" && download_asset "$ASSET_NAME" "${TMPDIR_INSTALL}/${ASSET_NAME}"
   selected "$CLAUDE_BINARY_NAME" && download_asset "$CLAUDE_ASSET_NAME" "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}"
   selected "$JEV_LOGS_BINARY_NAME" && download_asset "$JEV_LOGS_ASSET_NAME" "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}"
+  selected "$PROXY_BINARY_NAME" && download_asset "$PROXY_ASSET_NAME" "${TMPDIR_INSTALL}/${PROXY_ASSET_NAME}"
   download_asset "SHA256SUMS" "${TMPDIR_INSTALL}/SHA256SUMS"
 
   selected "$BINARY_NAME" && verify_checksum "${TMPDIR_INSTALL}/${ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
   selected "$CLAUDE_BINARY_NAME" && verify_checksum "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
   selected "$JEV_LOGS_BINARY_NAME" && verify_checksum "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
+  selected "$PROXY_BINARY_NAME" && verify_checksum "${TMPDIR_INSTALL}/${PROXY_ASSET_NAME}" "${TMPDIR_INSTALL}/SHA256SUMS"
 
   selected "$BINARY_NAME" && install_binary "${TMPDIR_INSTALL}/${ASSET_NAME}" "$INSTALL_DIR" "$BINARY_NAME"
   selected "$CLAUDE_BINARY_NAME" && install_binary "${TMPDIR_INSTALL}/${CLAUDE_ASSET_NAME}" "$INSTALL_DIR" "$CLAUDE_BINARY_NAME"
   selected "$JEV_LOGS_BINARY_NAME" && install_binary "${TMPDIR_INSTALL}/${JEV_LOGS_ASSET_NAME}" "$INSTALL_DIR" "$JEV_LOGS_BINARY_NAME"
+  selected "$PROXY_BINARY_NAME" && install_binary "${TMPDIR_INSTALL}/${PROXY_ASSET_NAME}" "$INSTALL_DIR" "$PROXY_BINARY_NAME"
 
   print_path_help "$INSTALL_DIR"
 
