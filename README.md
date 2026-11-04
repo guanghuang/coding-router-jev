@@ -643,7 +643,7 @@ The three score questions (`task_complexity`, `reasoning_required`, `tool_comple
 
 ### Local policy
 
-- Explicit leading requests such as "use Fast" or "switch to Strong" override the JEV tier choice.
+- Explicit leading requests such as "use Fast" or "switch to Strong" override the JEV tier choice. For Codex, `use terra` and `use codex` select the configured balanced tier.
 - Invalid choices, failed JEV requests, and malformed confidence retain the current tier. JEV has a three-second deadline.
 - Below the configured confidence threshold, downgrades are refused and upgrades are capped at the higher of the current tier and Balanced (or retained if that tier is unavailable). For example, from Fast the ceiling is Balanced; from Strong the ceiling stays Strong.
 - There is **no local cache downgrade guard**. JEV receives the observations to weigh cache reuse.

@@ -29,6 +29,26 @@ function result(input: RoutingInput, tier: string, effort: string) {
     answers: { model: { type: "choice" as const, choice: tier, confidence: 0.9, probabilities: {} }, reasoning_effort: { type: "choice" as const, choice: effort, confidence: 0.9, probabilities: {} } },
   } };
 }
+test("Codex terra and codex overrides select the configured balanced model", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codex-jev-alias-"));
+  const upstream = Bun.serve({ port: 0, fetch: async request => Response.json({ received: await request.json() }) });
+  const proxy = startProxy(pinnedCodexConfig({ CODING_ROUTER_BALANCED_MODEL_CODEX: "custom-balanced" }), {
+    route: async input => result(input, "strong", "low"),
+    apiBaseURL: `http://127.0.0.1:${upstream.port}`,
+    logDirectory: directory,
+  });
+  try {
+    for (const prompt of ["use terra, say hi", "use codex, say hi"]) {
+      const response = await fetch(`http://127.0.0.1:${proxy.port}/responses`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: AUTO_MODEL, prompt_cache_key: prompt, input: [{ role: "user", content: prompt }] }),
+      });
+      expect((await response.json()).received.model).toBe("custom-balanced");
+    }
+    const records = (await readFile(proxy.logPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(records.map(record => record.decision.reason)).toEqual(["override/upgrade", "override/upgrade"]);
+  } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
+});
 test("proxy routes once per turn, keeps tool continuations, streams notices once, and logs JSONL", async () => {
   const directory = await mkdtemp(join(tmpdir(), "codex-jev-proxy-"));
   const captured: { body: CodexBody; auth: string | null }[] = [];
