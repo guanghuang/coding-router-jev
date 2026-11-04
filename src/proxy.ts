@@ -321,7 +321,7 @@ export function startProxy(config: Config, options: { route?: Route; apiBaseURL?
           catch (error) { result = { request: buildRequest(routingInput), response: null, error: error instanceof Error ? error.message : "JEV routing failed", ms: Date.now() - started }; }
           const modelAnswer = result.response?.answers?.model;
           const confidence = modelAnswer?.type === "choice" && Number.isFinite(modelAnswer.confidence) && modelAnswer.confidence >= 0 && modelAnswer.confidence <= 1 ? modelAnswer.confidence : null;
-          const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, candidates, config.minConfidence);
+          const decision = decide(turn.prompt, modelAnswer?.type === "choice" ? modelAnswer.choice : undefined, confidence ?? undefined, currentTier, candidates, config.minConfidence, { terra: "balanced", codex: "balanced" });
           const selected = candidates.find(candidate => candidate.tier === decision.tier)!;
           const effortAnswer = result.response?.answers?.reasoning_effort;
           const desired = effortAnswer?.type === "choice" && Number.isFinite(effortAnswer.confidence) && effortAnswer.confidence >= config.minConfidence && effortAnswer.confidence <= 1 && selected.efforts.includes(effortAnswer.choice) ? effortAnswer.choice : undefined;
