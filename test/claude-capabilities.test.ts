@@ -306,8 +306,12 @@ describe("claudeCandidatesFor with capabilities", () => {
     expect(fable!.efforts).toContain("max");
   });
 
-  test("default config candidates have capacity from known defaults", () => {
-    const config = configFromEnv({});
+  test("pinned candidates have capacity from the model table", () => {
+    const config = configFromEnv({
+      CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
+      CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-sonnet-5-5",
+      CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-5-5",
+    });
     const candidates = claudeCandidatesFor(config);
     for (const c of candidates) {
       expect(c.capacity?.contextWindow).toBe(c.tier === "fast" ? 200_000 : 1_000_000);
