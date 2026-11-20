@@ -11,9 +11,10 @@ export type ClaudeThinkingMode = "adaptive" | "budgeted" | "none";
 export type ClaudeModelCapabilities = {
   modelId: string;
   family: string;
-  contextWindow: number;
-  maxOutput: number;
+  contextWindow?: number;
+  maxOutput?: number;
   thinkingMode: ClaudeThinkingMode;
+  thinkingTypes?: string[];
   /** Effort levels accepted by this model's adaptive thinking interface. */
   supportedEfforts: string[];
   /** Default effort when the model supports adaptive thinking. */
@@ -153,6 +154,19 @@ export function resolveClaudeThinking(
 ): string | undefined {
   if (!caps) return undefined;
 
+  if (caps.thinkingTypes && body.thinking && typeof body.thinking === "object") {
+    const type = (body.thinking as { type?: string }).type;
+    if (type && !caps.thinkingTypes.includes(type)) {
+      if (type === "enabled" && caps.thinkingTypes.includes("adaptive")) body.thinking = { type: "adaptive" };
+      else delete body.thinking;
+    }
+  }
+
+  if (caps.thinkingTypes && !claudeEffortsFor(caps).length && body.output_config && typeof body.output_config === "object") {
+    const { effort: _effort, ...rest } = body.output_config as Record<string, unknown>;
+    body.output_config = Object.keys(rest).length ? rest : undefined;
+  }
+
   if (caps.thinkingMode === "adaptive") {
     const effectiveEffort = normalizeClaudeEffort(effort, caps);
     if (effectiveEffort) {
@@ -185,9 +199,9 @@ export function claudeCapacity(
 ): CapacityInfo | undefined {
   if (!caps) return undefined;
   let contextWindow = caps.contextWindow;
-  if (configuredContextWindow !== undefined && configuredContextWindow > 0) {
+  if (contextWindow !== undefined && configuredContextWindow !== undefined && configuredContextWindow > 0) {
     // User override cannot exceed physical capacity
-    contextWindow = Math.min(configuredContextWindow, caps.contextWindow);
+    contextWindow = Math.min(configuredContextWindow, contextWindow);
   }
   return { contextWindow, outputBudget: caps.maxOutput };
 }

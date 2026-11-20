@@ -9,6 +9,16 @@ import { buildRequest, type Route, type RoutingInput } from "../src/router";
 import { textOfMessage, textOfBlock, isToolResult } from "../src/claude-types";
 import type { ClaudeBody, ClaudeMessage } from "../src/claude-types";
 
+function pinnedClaudeConfig(overrides: Record<string, string> = {}) {
+  return configFromEnv({
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
+    CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-sonnet-5-5",
+    CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-5-5",
+    CODING_ROUTER_LONG_MODEL_CLAUDE: "claude-fable-5-1",
+    ...overrides,
+  });
+}
+
 test("captures the original ANTHROPIC_BASE_URL before the child uses the local proxy", async () => {
   const directory = await mkdtemp(join(tmpdir(), "jev-claude-upstream-test-"));
   const original = process.env.ANTHROPIC_BASE_URL;
@@ -25,7 +35,7 @@ test("captures the original ANTHROPIC_BASE_URL before the child uses the local p
   let proxy: ReturnType<typeof startClaudeProxy> | undefined;
   try {
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${upstream.port}/gateway/`;
-    proxy = startClaudeProxy(configFromEnv({}), { logDirectory: directory });
+    proxy = startClaudeProxy(pinnedClaudeConfig({}), { logDirectory: directory });
     // Even changing the environment later must not replace the captured destination.
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxy.port}`;
     const headers = { "x-api-key": "test-custom-key", "content-type": "application/json" };
@@ -78,6 +88,117 @@ function send(proxyPort: number, messages: ClaudeMessage[], model = CLAUDE_SENTI
   });
 }
 
+test("Claude discovery uses request auth, paginates, and pins catalog limits and effort", async () => {
+  const captured: ClaudeBody[] = [];
+  const inputs: RoutingInput[] = [];
+  const cursors: (string | null)[] = [];
+  const fast = {
+    id: "claude-haiku-5-5", lifecycle: "active", created_at: "2026-10-07T18:00:00Z",
+    max_input_tokens: 100, max_tokens: 40,
+    capabilities: {
+      thinking: { supported: true, types: { adaptive: { supported: true }, enabled: { supported: false } } },
+      effort: { supported: true, low: { supported: true }, medium: { supported: false } },
+    },
+  };
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    expect(request.headers.get("authorization")).toBe("Bearer mock-subscription");
+    expect(request.headers.get("anthropic-beta")).toBe("oauth-2025-04-20");
+    if (url.pathname === "/v1/models") {
+      const cursor = url.searchParams.get("after_id");
+      cursors.push(cursor);
+      return cursor ? Response.json({ data: [fast], has_more: false }) : Response.json({
+        data: [
+          { id: "claude-haiku-6-0", lifecycle: "deprecated", created_at: "2026-10-08T18:00:00Z" },
+          { id: "claude-sonnet-5-5", max_input_tokens: 1_000_000, max_tokens: 128_000 },
+          { id: "claude-haiku-4-5-20251001", created_at: "2025-10-15T18:00:00Z" },
+        ],
+        has_more: true, last_id: "claude-haiku-4-5-20251001",
+      });
+    }
+    captured.push(await request.json());
+    return Response.json({ type: "message", content: [] });
+  } });
+  const proxy = startClaudeProxy(configFromEnv({
+    CODING_ROUTER_LOG_ENABLED: "false",
+    CODING_ROUTER_STRONG_MODEL_CLAUDE: "custom-pinned-opus",
+  }), {
+    upstreamBaseURL: `http://127.0.0.1:${upstream.port}`,
+    route: async input => { inputs.push(input); return result(input, "fast"); },
+  });
+  const request = (content: string, max_tokens: number) => fetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+    method: "POST",
+    headers: { authorization: "Bearer mock-subscription", "anthropic-beta": "oauth-2025-04-20", "content-type": "application/json" },
+    body: JSON.stringify({
+      model: CLAUDE_SENTINEL, messages: [{ role: "user", content }], max_tokens,
+      thinking: { type: "enabled", budget_tokens: 1024 },
+    }),
+  });
+  try {
+    for (const [content, output] of [
+      ["Hello".repeat(62), 40],
+      ["Output is too large for Haiku", 41],
+      ["x".repeat(420), 40],
+    ] as const) {
+      const response = await request(content, output);
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(cursors).toEqual([null, "claude-haiku-4-5-20251001"]);
+    expect(captured.map(body => body.model)).toEqual(["claude-haiku-5-5", "claude-sonnet-5-5", "claude-sonnet-5-5"]);
+    expect(captured[0].thinking).toEqual({ type: "adaptive" });
+    expect(captured[0].output_config).toHaveProperty("effort", "low");
+    expect(inputs[0].candidates.map(({ id }) => id)).toEqual(["claude-haiku-5-5", "claude-sonnet-5-5", "custom-pinned-opus"]);
+    const candidate = inputs[0].candidates[0];
+    expect(candidate.capacity).toEqual({ contextWindow: 100, outputBudget: 40 });
+    expect(candidate.efforts).toEqual(["low"]);
+    for (const input of inputs.slice(1)) expect(input.candidates.some(c => c.tier === "fast")).toBe(false);
+    const wire = buildRequest(inputs[0]);
+    expect(wire.state).toHaveProperty("environment.available_models");
+    expect(JSON.stringify(wire.questions.model)).toContain("100 input tokens");
+  } finally {
+    proxy.close();
+    upstream.stop(true);
+  }
+});
+
+test("Claude catalog errors name model pins and allow discovery to retry", async () => {
+  let catalogRequests = 0;
+  let messageRequests = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === "/v1/models") {
+      if (++catalogRequests === 1) return new Response(null, { status: 401 });
+      if (catalogRequests === 2) {
+        return Response.json({ data: [{ id: "claude-haiku-4-5-20251001", lifecycle: "retired" }], has_more: false });
+      }
+      return Response.json({ data: [{ id: "claude-haiku-5-5" }], has_more: false });
+    }
+    messageRequests++;
+    return Response.json({ type: "message", content: [] });
+  } });
+  const proxy = startClaudeProxy(pinnedClaudeConfig({
+    CODING_ROUTER_LOG_ENABLED: "false",
+    CODING_ROUTER_FAST_MODEL_CLAUDE: "haiku:latest",
+  }), { upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, route: async input => result(input, "fast") });
+  try {
+    const first = await send(proxy.port, [{ role: "user", content: "hi" }]);
+    expect(first.status).toBe(400);
+    expect((await first.json()).error.message).toContain("CODING_ROUTER_FAST_MODEL_CLAUDE (haiku:latest)");
+    const missing = await send(proxy.port, [{ role: "user", content: "hi" }]);
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error.message).toContain("no active model for haiku:latest");
+    expect(messageRequests).toBe(0);
+    const retry = await send(proxy.port, [{ role: "user", content: "hi" }]);
+    expect(retry.status).toBe(200);
+    await retry.text();
+    expect(catalogRequests).toBe(3);
+    expect(messageRequests).toBe(1);
+  } finally {
+    proxy.close();
+    upstream.stop(true);
+  }
+});
+
 test("routes once per new user intent, keeps tool continuations, and logs JSONL", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-proxy-"));
   const captured: { body: ClaudeBody; apiKey: string | null }[] = [];
@@ -89,7 +210,7 @@ test("routes once per new user intent, keeps tool continuations, and logs JSONL"
   } });
   const base = `http://127.0.0.1:${upstream.port}`;
   const route: Route = async input => { inputs.push(input); return result(input, inputs.length === 1 ? "balanced" : "strong"); };
-  const proxy = startClaudeProxy(configFromEnv({}), { route, upstreamBaseURL: base, logDirectory: directory });
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), { route, upstreamBaseURL: base, logDirectory: directory });
 
   try {
     const annotated = "<system-reminder>Workspace instructions</system-reminder>\n<local-command-caveat>Local output</local-command-caveat>\n<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>\n<local-command-stdout>Model selected</local-command-stdout>\nimplement first";
@@ -98,7 +219,7 @@ test("routes once per new user intent, keeps tool continuations, and logs JSONL"
     expect(inputs[0].agent).toBe("claude");
     expect(inputs[0].prompt).toBe("implement first");
     expect(captured[0].body.messages[0].content).toBe(annotated);
-    expect(captured[0].body.model).toBe(configFromEnv({}).claudeModels.balanced);
+    expect(captured[0].body.model).toBe(pinnedClaudeConfig({}).claudeModels.balanced);
     expect(captured[0].apiKey).toBe("fake-key");
 
     await (await send(proxy.port, [{ role: "user", content: "implement first" }])).text();
@@ -134,7 +255,7 @@ test("concurrent duplicate requests route exactly once", async () => {
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
   const route: Route = async input => { inputs.push(input); await Bun.sleep(5); return result(input, "balanced"); };
-  const proxy = startClaudeProxy(configFromEnv({}), { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
   try {
     const msg: ClaudeMessage = { role: "user", content: "implement concurrent" };
     await Promise.all([send(proxy.port, [msg]), send(proxy.port, [msg])]);
@@ -150,7 +271,7 @@ test("physical model bypass preserves the explicit model without routing", async
     captured.push(await req.json() as ClaudeBody);
     return new Response(anthropicStream(captured.at(-1)!.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => { routeCalls++; return result(input, "fast"); },
   });
@@ -169,7 +290,7 @@ test("separate sessions route independently", async () => {
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
   const route: Route = async input => { inputs.push(input); return result(input, "fast"); };
-  const proxy = startClaudeProxy(configFromEnv({}), { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), { route, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory });
   try {
     const sendWithSystem = (system: string, content: string) =>
       fetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
@@ -192,7 +313,7 @@ test("streaming feedback is an assistant text block and provider block indices a
     forwarded.push(body);
     return new Response(anthropicStream(body.model, "streamed text", 42), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -234,7 +355,7 @@ test("non-streaming JSON response passes through and extracts usage", async () =
       usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 25 },
     });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -249,7 +370,7 @@ test("non-streaming JSON response passes through and extracts usage", async () =
 
 test("HEAD probe returns 200", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-head-"));
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: "http://127.0.0.1:1", logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -261,7 +382,7 @@ test("HEAD probe returns 200", async () => {
 
 test("malformed JSON returns Anthropic-compatible error", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-malformed-"));
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: "http://127.0.0.1:1", logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -280,7 +401,7 @@ test("malformed JSON returns Anthropic-compatible error", async () => {
 
 test("missing messages field returns 400", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-nomsg-"));
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: "http://127.0.0.1:1", logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -298,7 +419,7 @@ test("missing messages field returns 400", async () => {
 
 test("missing model field returns 400", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-nomodel-"));
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: "http://127.0.0.1:1", logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -321,7 +442,7 @@ test("empty messages array does not trigger routing", async () => {
     const body = await req.json() as ClaudeBody;
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => { routeCalls++; return result(input, "fast"); },
   });
@@ -340,7 +461,7 @@ test("failed JEV call keeps current model and logs the error", async () => {
     captured.push(body);
     return new Response(anthropicStream(body.model, "response"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     onNotice: n => notices.push(n),
     route: async () => ({ request: buildRequest({ prompt: "x", currentTier: "fast", currentModel: "m", contextTokens: 0, candidates: [] }), response: null, error: "timeout", ms: 3000 }),
@@ -349,7 +470,7 @@ test("failed JEV call keeps current model and logs the error", async () => {
     await (await send(proxy.port, [{ role: "user", content: "hello" }])).text();
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("JEV/unavailable");
-    expect(captured[0].model).toBe(configFromEnv({}).claudeModels.fast);
+    expect(captured[0].model).toBe(pinnedClaudeConfig({}).claudeModels.fast);
     const record = JSON.parse((await readFile(proxy.logPath, "utf8")).trim());
     expect(record.jev.error).toBe(REDACTED_ERROR);
   } finally { proxy.close(); upstream.stop(true); await rm(directory, { recursive: true, force: true }); }
@@ -362,7 +483,7 @@ test("onNotice callback fires once per turn", async () => {
     const body = await req.json() as ClaudeBody;
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     onNotice: n => notices.push(n),
     route: async input => result(input, "balanced"),
@@ -377,11 +498,11 @@ test("onNotice callback fires once per turn", async () => {
 });
 
 test("Bedrock transport is detected and rejected", () => {
-  expect(() => startClaudeProxy(configFromEnv({}), { upstreamBaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com" })).toThrow(/Bedrock/);
+  expect(() => startClaudeProxy(pinnedClaudeConfig({}), { upstreamBaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com" })).toThrow(/Bedrock/);
 });
 
 test("Vertex transport is detected and rejected", () => {
-  expect(() => startClaudeProxy(configFromEnv({}), { upstreamBaseURL: "https://us-central1-aiplatform.googleapis.com" })).toThrow(/Vertex/);
+  expect(() => startClaudeProxy(pinnedClaudeConfig({}), { upstreamBaseURL: "https://us-central1-aiplatform.googleapis.com" })).toThrow(/Vertex/);
 });
 
 test("claudeArgs builds correct arguments as string array", () => {
@@ -399,14 +520,14 @@ test("claudeArgs builds correct arguments as string array", () => {
 });
 
 test("claudeCandidatesFor uses config claudeModels", () => {
-  const config = configFromEnv({});
+  const config = pinnedClaudeConfig({});
   const candidates = claudeCandidatesFor(config);
   expect(candidates.length).toBeGreaterThanOrEqual(3);
   expect(candidates.every(c => c.id === config.claudeModels[c.tier])).toBe(true);
 });
 
 test("claudeCandidatesFor with longModelEnabled includes long tier", () => {
-  const config = configFromEnv({ CODING_ROUTER_LONG_MODEL_ENABLE: "true" });
+  const config = pinnedClaudeConfig({ CODING_ROUTER_LONG_MODEL_ENABLE: "true" });
   const candidates = claudeCandidatesFor(config);
   expect(candidates.some(c => c.tier === "long")).toBe(true);
   expect(candidates).toHaveLength(4);
@@ -420,7 +541,7 @@ test("upstream prefix is preserved in forwarded requests", async () => {
     const body = await req.json() as ClaudeBody;
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -437,7 +558,7 @@ test("disabled recent context omits recentContext from routing input", async () 
     const body = await req.json() as ClaudeBody;
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({ CODING_ROUTER_SEND_RECENT_CONTEXT: "false" }), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({ CODING_ROUTER_SEND_RECENT_CONTEXT: "false" }), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => { seen = input; return result(input, "fast"); },
   });
@@ -480,13 +601,13 @@ test("Claude model overrides from environment", () => {
     CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-4-20250514",
   });
   expect(config.claudeModels.fast).toBe("claude-haiku-4-20250514");
-  expect(config.claudeModels.balanced).toBe("claude-sonnet-5-5");
+  expect(config.claudeModels.balanced).toBe("sonnet:latest");
   expect(config.claudeModels.strong).toBe("claude-opus-4-20250514");
-  expect(config.claudeModels.long).toBe("claude-fable-5-1");
+  expect(config.claudeModels.long).toBe("fable:latest");
 });
 
 test("Claude and Codex models are independent", () => {
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CODEX: "codex-custom",
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-custom",
   });
@@ -496,7 +617,7 @@ test("Claude and Codex models are independent", () => {
 
 test("proxy error type is proxy_error, distinct from upstream api_error", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-proxyerr-"));
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: "http://127.0.0.1:1", logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -515,7 +636,7 @@ test("large context excludes small-capacity candidates from routing", async () =
     const body = await req.json() as ClaudeBody;
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
     CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-sonnet-5-5",
     CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-5-5",
@@ -538,7 +659,7 @@ test("large context excludes small-capacity candidates from routing", async () =
 
 test("all candidates over capacity returns 400 with actionable error", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-jev-no-eligible-"));
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
     CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
     CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
@@ -564,7 +685,7 @@ test("effort normalization applies correct output_config on upstream body", asyn
     captured.push(await req.json() as ClaudeBody);
     return new Response(anthropicStream(captured.at(-1)!.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
   });
   const route: Route = async input => ({
@@ -593,7 +714,7 @@ test("physical model bypass preserves client-supplied effort for adaptive models
     captured.push(await req.json() as Record<string, unknown>);
     return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -616,7 +737,7 @@ test("Haiku bypass strips incompatible effort from output_config", async () => {
     captured.push(await req.json() as Record<string, unknown>);
     return new Response(anthropicStream("claude-haiku-4-5-20251001", "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const proxy = startClaudeProxy(configFromEnv({}), {
+  const proxy = startClaudeProxy(pinnedClaudeConfig({}), {
     upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, logDirectory: directory,
     route: async input => result(input, "fast"),
   });
@@ -640,7 +761,7 @@ test("Claude override alias 'use sonnet' overrides JEV tier to balanced", async 
     captured.push(await req.json() as ClaudeBody);
     return new Response(anthropicStream(captured.at(-1)!.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-haiku-4-5-20251001",
     CODING_ROUTER_BALANCED_MODEL_CLAUDE: "claude-sonnet-5-5",
     CODING_ROUTER_STRONG_MODEL_CLAUDE: "claude-opus-5-5",
@@ -668,7 +789,7 @@ test("currentEffort propagates previous turn's effective effort", async () => {
     const body = await req.json() as ClaudeBody;
     return new Response(anthropicStream(body.model, "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
   });
   const route: Route = async input => {
@@ -707,7 +828,7 @@ test("low-confidence JEV effort is ignored and prior effort preserved", async ()
     captured.push(await req.json() as Record<string, unknown>);
     return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
     CODING_ROUTER_MIN_CONFIDENCE: "0.5",
   });
@@ -751,7 +872,7 @@ test("same-turn continuation re-applies effort from state", async () => {
     captured.push(await req.json() as Record<string, unknown>);
     return new Response(anthropicStream("claude-sonnet-5-5", "ok"), { headers: { "content-type": "text/event-stream" } });
   } });
-  const config = configFromEnv({
+  const config = pinnedClaudeConfig({
     CODING_ROUTER_FAST_MODEL_CLAUDE: "claude-sonnet-5-5",
   });
   const route: Route = async input => ({

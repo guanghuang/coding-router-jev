@@ -7,7 +7,8 @@ import { formatFeedback, type FeedbackValues } from "./feedback";
 import { cleanupStaleLogs, DEFAULT_LOG_DIR, sessionHistory } from "./history";
 import { TIERS, type Candidate, type RecentContext, type Tier } from "./types";
 import { textOfMessage, routingTextOfMessage, isToolResult, type ClaudeBody } from "./claude-types";
-import { lookupCapabilities, claudeEffortsFor, claudeCapacity, resolveClaudeThinking, CLAUDE_OVERRIDE_ALIASES } from "./claude-capabilities";
+import { lookupCapabilities, claudeEffortsFor, claudeCapacity, resolveClaudeThinking, CLAUDE_OVERRIDE_ALIASES, type ClaudeModelCapabilities } from "./claude-capabilities";
+import { claudeCatalogCapabilities, claudeLatestFamily, fetchClaudeCatalog, latestClaudeModel } from "./claude-catalog";
 
 export const CLAUDE_SENTINEL = "coding-router-jev";
 
@@ -88,16 +89,21 @@ type ClaudeState = {
   lastUsage?: { read: number | null; created: number | null; at: number };
 };
 
-export function claudeCandidatesFor(config: Config): Candidate[] {
+export function claudeCandidatesFor(config: Config, discovered?: ReadonlyMap<string, ClaudeModelCapabilities>): Candidate[] {
   return TIERS.filter(tier => tier !== "long" || config.longModelEnabled).map(tier => {
-    const id = config.claudeModels[tier];
-    const caps = lookupCapabilities(id);
+    const configured = config.claudeModels[tier];
+    const caps = discovered?.get(configured) ?? lookupCapabilities(configured);
+    const id = caps?.modelId ?? configured;
     const efforts = claudeEffortsFor(caps);
     const capacity = claudeCapacity(caps, config.claudeContextWindow);
     return {
       tier,
       id,
-      description: caps ? `${id}; ${caps.contextWindow} context tokens` : id,
+      description: [
+        id,
+        capacity?.contextWindow === undefined ? undefined : `${capacity.contextWindow} input tokens`,
+        discovered?.has(configured) && capacity?.outputBudget !== undefined ? `${capacity.outputBudget} max output tokens` : undefined,
+      ].filter(Boolean).join("; "),
       efforts,
       defaultEffort: caps?.defaultEffort,
       capacity,
@@ -126,12 +132,36 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
 
   const states = new Map<string, ClaudeState>();
   const locks = new Map<string, Promise<unknown>>();
-  const cachedCandidates = claudeCandidatesFor(config);
+  const configuredCandidates = claudeCandidatesFor(config);
+  const aliases = configuredCandidates.filter(candidate => claudeLatestFamily(candidate.id));
+  let discovery: Promise<Map<string, ClaudeModelCapabilities>> | undefined;
+
+  function discover(headers: Headers) {
+    return discovery ??= (async () => {
+      let entries: Awaited<ReturnType<typeof fetchClaudeCatalog>>;
+      try { entries = await fetchClaudeCatalog(upstreamBase, headers); }
+      catch {
+        const pins = aliases.map(({ tier, id }) => `CODING_ROUTER_${tier.toUpperCase()}_MODEL_CLAUDE (${id})`);
+        throw new Error(`Claude model catalog unavailable. Check upstream authentication and GET /v1/models, or set exact model IDs for ${pins.join(", ")}.`);
+      }
+      const resolved = new Map<string, ClaudeModelCapabilities>();
+      for (const { tier, id } of aliases) {
+        const family = claudeLatestFamily(id)!;
+        const entry = latestClaudeModel(entries, family);
+        if (!entry) throw new Error(`Claude model catalog has no active model for ${id}. Set CODING_ROUTER_${tier.toUpperCase()}_MODEL_CLAUDE to an exact model ID.`);
+        resolved.set(id, claudeCatalogCapabilities(entry, family));
+      }
+      return resolved;
+    })().catch(error => {
+      discovery = undefined;
+      throw error;
+    });
+  }
 
   const emittedNotices = new Set<string>();
   const announced = new Set<string>();
 
-  async function prepare(body: ClaudeBody, signal?: AbortSignal) {
+  async function prepare(body: ClaudeBody, headers: Headers, signal?: AbortSignal) {
     // Strip only feedback actually emitted by this proxy, preserving provider text.
     for (const message of body.messages) {
       if (message.role !== "assistant") continue;
@@ -147,7 +177,9 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
     const key = claudeConversationKey(body);
     const previous = locks.get(key) ?? Promise.resolve();
     const job = previous.catch(() => {}).then(async () => {
-      const candidates = cachedCandidates;
+      const discovered = body.model === CLAUDE_SENTINEL && aliases.length ? await discover(headers) : undefined;
+      const candidates = discovered ? claudeCandidatesFor(config, discovered) : configuredCandidates;
+      const capsFor = (candidate: Candidate) => discovered?.get(config.claudeModels[candidate.tier]) ?? lookupCapabilities(candidate.id);
       let state = states.get(key);
       if (!state) {
         const startCandidate = candidates.find(c => c.tier === config.startTier) ?? candidates.find(c => c.tier === "fast")!;
@@ -176,14 +208,24 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
       const outputReserve = body.max_tokens ?? 16_384;
 
       // Eligibility: filter candidates that can fit this request
-      const eligibility = checkEligibility(candidates, contextTokens, outputReserve);
-      const eligibleCandidates = eligibility.eligible.length > 0
-        ? [...eligibility.eligible, ...eligibility.unknown]
-        : eligibility.unknown.length > 0
-          ? eligibility.unknown
-          : null;
+      const usesCatalog = (candidate: Candidate) => discovered?.has(config.claudeModels[candidate.tier]);
+      const eligibility = checkEligibility(candidates.filter(candidate => !usesCatalog(candidate)), contextTokens, outputReserve);
+      for (const candidate of candidates.filter(usesCatalog)) {
+        const { contextWindow, outputBudget } = candidate.capacity ?? {};
+        if (contextWindow !== undefined && contextTokens > contextWindow) {
+          eligibility.rejected.push({ candidate, reason: `requires ${contextTokens} input tokens; model limit is ${contextWindow}` });
+        } else if (outputBudget !== undefined && body.max_tokens !== undefined && body.max_tokens > outputBudget) {
+          eligibility.rejected.push({ candidate, reason: `requests ${body.max_tokens} output tokens; model limit is ${outputBudget}` });
+        } else {
+          (contextWindow === undefined ? eligibility.unknown : eligibility.eligible).push(candidate);
+        }
+      }
+      const eligibleCandidates = [
+        ...candidates.filter(candidate => eligibility.eligible.includes(candidate)),
+        ...candidates.filter(candidate => eligibility.unknown.includes(candidate)),
+      ];
 
-      if (!eligibleCandidates) {
+      if (!eligibleCandidates.length) {
         const reasons = eligibility.rejected.map(r => `${r.candidate.id} (${r.candidate.tier}): ${r.reason}`).join("; ");
         throw new Error(`No Claude model can fit this request. Estimated ${contextTokens} context tokens + ${outputReserve} output reserve. Rejected: ${reasons}. Compact the conversation or configure a larger model.`);
       }
@@ -225,7 +267,7 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         // Effort normalization: prefer JEV confident choice, then preserve last effort if supported, then model default
         const effortAnswer = result.response?.answers?.reasoning_effort;
         const desiredEffort = effortAnswer?.type === "choice" && Number.isFinite(effortAnswer.confidence) && effortAnswer.confidence >= 0 && effortAnswer.confidence <= 1 && effortAnswer.confidence >= config.minConfidence ? effortAnswer.choice : undefined;
-        const selectedCaps = lookupCapabilities(selected.id);
+        const selectedCaps = capsFor(selected);
         const effortToApply = desiredEffort ?? state.lastEffort;
         const effectiveEffort = resolveClaudeThinking(effortToApply, selectedCaps, body as Record<string, unknown>);
 
@@ -260,7 +302,12 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
         }
         // Re-apply effort on non-routing paths (same-turn continuations, tool rounds)
         // to ensure output_config.effort is consistent even when routing is skipped
-        const currentCaps = lookupCapabilities(state.model);
+        const current = candidates.find(candidate => candidate.tier === state.tier && candidate.id === state.model);
+        if (current && usesCatalog(current) && !eligibleCandidates.includes(current)) {
+          const rejection = eligibility.rejected.find(item => item.candidate === current);
+          throw new Error(`Claude continuation exceeds the limits for ${current.id}: ${rejection?.reason}. Compact the conversation or start a new turn.`);
+        }
+        const currentCaps = current ? capsFor(current) : lookupCapabilities(state.model);
         if (currentCaps) {
           resolveClaudeThinking(state.lastEffort, currentCaps, body as Record<string, unknown>);
         }
@@ -309,18 +356,14 @@ export function startClaudeProxy(config: Config, options: { route?: Route; upstr
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: "model: field is required and must be a non-empty string" } }, { status: 400 });
         }
 
-        if (body.model === CLAUDE_SENTINEL && !cachedCandidates.length) {
-          return Response.json({ type: "error", error: { type: "invalid_request_error", message: "No Claude model candidates configured" } }, { status: 400 });
-        }
-
+        const headers = new Headers(request.headers);
+        for (const name of ["host", "content-length", "transfer-encoding", "connection", "accept-encoding"]) headers.delete(name);
         let prepared: Awaited<ReturnType<typeof prepare>>;
-        try { prepared = await prepare(body, request.signal); }
+        try { prepared = await prepare(body, headers, request.signal); }
         catch (prepError) {
           return Response.json({ type: "error", error: { type: "invalid_request_error", message: prepError instanceof Error ? prepError.message : "Invalid request" } }, { status: 400 });
         }
 
-        const headers = new Headers(request.headers);
-        for (const name of ["host", "content-length", "transfer-encoding", "connection", "accept-encoding"]) headers.delete(name);
         const upstreamPath = path.startsWith("/v1") ? path : `/v1${path}`;
         const response = await fetch(`${upstreamBase.replace(/\/$/, "")}${upstreamPath}${url.search}`, {
           method: "POST",

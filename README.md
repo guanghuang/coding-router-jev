@@ -391,19 +391,21 @@ Key behaviors:
 
 | Variable | Default |
 | --- | --- |
-| `CODING_ROUTER_FAST_MODEL_CLAUDE` | `claude-haiku-4-5-20251001` |
-| `CODING_ROUTER_BALANCED_MODEL_CLAUDE` | `claude-sonnet-5-5` |
-| `CODING_ROUTER_STRONG_MODEL_CLAUDE` | `claude-opus-5-5` |
-| `CODING_ROUTER_LONG_MODEL_CLAUDE` | `claude-fable-5-1` |
+| `CODING_ROUTER_FAST_MODEL_CLAUDE` | `haiku:latest` |
+| `CODING_ROUTER_BALANCED_MODEL_CLAUDE` | `sonnet:latest` |
+| `CODING_ROUTER_STRONG_MODEL_CLAUDE` | `opus:latest` |
+| `CODING_ROUTER_LONG_MODEL_CLAUDE` | `fable:latest` |
 | `CODING_ROUTER_CONTEXT_WINDOW_CLAUDE` | Unset (uses model physical capacity) |
 
-Defaults map Fast to Haiku 4.5, Balanced to Sonnet 5.5, Strong to Opus 5.5, and optional Long to Fable 5.1. IDs are listed in [Anthropic’s official SDK](https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/model.py). Model access depends on your account or custom server; Long remains disabled unless enabled. `_MODEL_CLAUDE` variables accept exact Anthropic model IDs. The router looks up each model in its known-model table for context window, output budget, and thinking mode. Unknown model IDs are used as-is but without capacity enforcement or effort normalization.
+On the first routed request, the proxy uses Claude Code’s request credentials to fetch the upstream [Models API](https://platform.claude.com/docs/en/api/models/list). It resolves enabled family aliases to the newest active model in that family, then pins those IDs until the launcher restarts. Long remains disabled unless enabled. The proxy checks each discovered model’s advertised input and output limits separately and uses the catalog’s thinking and effort metadata. Claude Code’s own compaction limit for the virtual model is separate.
 
-Set `CODING_ROUTER_CONTEXT_WINDOW_CLAUDE` to a positive integer to override the virtual context window for all Claude candidates. The override cannot exceed a model's physical capacity — it is clamped to `min(override, physical)`.
+Set a tier’s `_MODEL_CLAUDE` variable to an exact ID to pin it. If all enabled tiers are pinned, the proxy skips discovery. This also lets you use a custom server without a compatible model catalog. If discovery fails or a family is missing, the proxy names the setting you can pin. Pinned models use the router’s known-model table where available, and unknown pins are forwarded as configured.
+
+Set `CODING_ROUTER_CONTEXT_WINDOW_CLAUDE` to a positive integer to lower the input limit the router uses for candidates with known capacity. The override cannot raise a model’s capacity.
 
 ### Claude thinking and effort
 
-Claude models support different thinking modes:
+Discovered models use their advertised capabilities. For pinned models, examples from the built-in capability table include:
 
 | Model | Thinking mode | Supported efforts |
 | --- | --- | --- |
@@ -414,7 +416,7 @@ Claude models support different thinking modes:
 
 For adaptive-thinking models, JEV selects an effort level and the proxy sets `output_config.effort` on the request. The effort is normalized: if JEV selects an effort higher than the model supports, the highest supported level is used. If JEV confidence is below the threshold, the current effort or model default is kept.
 
-Budgeted-thinking models (Haiku) do not support adaptive effort. The proxy strips any incompatible `output_config.effort` fields for these models.
+Budgeted-thinking models such as Haiku 4.5 do not support adaptive effort. The proxy strips incompatible `output_config.effort` fields for these models.
 
 ### Claude session lifecycle
 
@@ -534,7 +536,7 @@ By default, the Codex model variables are latest-family aliases: `luna:latest`, 
 
 To pin an exact model instead, set the tier's variable to the exact provider ID, for example `CODING_ROUTER_FAST_MODEL_CODEX=chatgpt-6-luna`. Exact IDs stay pinned and never trigger catalog discovery; setting every enabled tier to an exact ID bypasses discovery entirely. A disabled Long tier never triggers discovery, and its `astra:latest` default is only resolved if Long is enabled.
 
-Discovery uses the authenticated Codex model catalog (the routing request's own credentials, against `https://chatgpt.com/backend-api/codex/models` by default, or the configured ChatGPT base URL), including catalog pagination. Custom providers that expose a usable model list in a supported shape are handled the same way; a custom provider with no usable model-list endpoint cannot resolve aliases, so pin exact IDs for every enabled tier in that setup. If discovery times out, is unauthorized or otherwise fails, or the family is missing, ambiguous, or the catalog is malformed or paginates incompletely, the request fails with an actionable error naming the family alias and the exact-ID setting to use instead (for example `CODING_ROUTER_FAST_MODEL_CODEX=<exact catalog model ID>`) — it never silently falls back to a hardcoded model. Claude and Pi model defaults are unchanged by this latest-by-default behavior.
+Discovery uses the authenticated Codex model catalog (the routing request's own credentials, against `https://chatgpt.com/backend-api/codex/models` by default, or the configured ChatGPT base URL), including catalog pagination. Custom providers that expose a usable model list in a supported shape are handled the same way; a custom provider with no usable model-list endpoint cannot resolve aliases, so pin exact IDs for every enabled tier in that setup. If discovery times out, is unauthorized or otherwise fails, or the family is missing, ambiguous, or the catalog is malformed or paginates incompletely, the request fails with an actionable error naming the family alias and the exact-ID setting to use instead (for example `CODING_ROUTER_FAST_MODEL_CODEX=<exact catalog model ID>`) — it never silently falls back to a hardcoded model.
 
 ### Pi agent configuration
 
